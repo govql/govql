@@ -1,1 +1,1 @@
-05 * * * * cd /congress && /usr/local/bin/usc-run votes --force >> /var/log/cron.log 2>&1
+35 * * * * cd /congress && /usr/local/bin/usc-run votes --force >> /var/log/cron.log 2>&1

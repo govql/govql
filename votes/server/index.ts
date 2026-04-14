@@ -19,7 +19,6 @@ import {
 // import { usePrometheus } from '@graphql-yoga/plugin-prometheus';
 import { useOpenTelemetry } from '@envelop/opentelemetry';
 
-
 const MONGO_URI = process.env.MONGO_URI ?? '';
 
 // const armor = new EnvelopArmor();
@@ -55,6 +54,15 @@ const VoteSchema = new mongoose.Schema(
     },
     Present: { type: [CongressVoterSchema], default: [] },
     Yea: { type: [CongressVoterSchema], default: [] },
+    Aye: { type: [CongressVoterSchema], default: [] },
+    No: { type: [CongressVoterSchema], default: [] },
+    Emmer: { type: [CongressVoterSchema], default: [] },
+    Jeffries: { type: [CongressVoterSchema], default: [] },
+    'Johnson (LA)': {
+      type: [CongressVoterSchema],
+      default: [],
+      alias: 'Johnson_LA',
+    },
   },
   { _id: false }
 );
@@ -231,7 +239,7 @@ query {
   },
 });
 
-(async () => {
+void (async () => {
   try {
     await mongoose.connect(MONGO_URI);
     console.log('Connected to MongoDB');
