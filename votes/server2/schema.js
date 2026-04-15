@@ -1,16 +1,9 @@
 import { createPostGraphileSchema } from 'postgraphile';
-import pg from 'pg';
-
-const { Pool } = pg;
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+import { pool } from './db.js';
 
 export async function buildSchema() {
   return createPostGraphileSchema(pool, 'public', {
     dynamicJson: true,
     simpleCollections: 'both',
-    graphiql: false,
   });
 }

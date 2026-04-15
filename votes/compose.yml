@@ -9,8 +9,6 @@ services:
   postgres:
     image: postgres:18-alpine
     restart: always
-    ports:
-      - 5432:5432
     environment:
       - POSTGRES_USER
       - POSTGRES_PASSWORD
@@ -53,51 +51,14 @@ services:
     environment:
       - DATABASE_URL
       - REDIS_URL
+      - ENABLE_GRAPHIQL
+      - LOG_LEVEL
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-  # mongo:
-  #   image: mongo
-  #   restart: always
-  #   ports:
-  #     - 27017:27017 # close the port in production
-  #   environment:
-  #     - MONGO_INITDB_ROOT_USERNAME
-  #     - MONGO_INITDB_ROOT_PASSWORD
-  #   volumes:
-  #     - mongo-data:/data/db
-  # mongo-express comes out in production
-  # mongo-express:
-  #   image: mongo-express
-  #   restart: always
-  #   ports:
-  #     - 8081:8081
-  #   environment:
-  #     - ME_CONFIG_MONGODB_ADMINUSERNAME
-  #     - ME_CONFIG_MONGODB_ADMINPASSWORD
-  #     - ME_CONFIG_MONGODB_SERVER=mongo
-  #     - ME_CONFIG_MONGODB_PORT=27017
-  #     - ME_CONFIG_BASICAUTH=false
-  # loader:
-  #   build: loader/.
-  #   environment:
-  #     - MONGO_URI
-  #   volumes:
-  #     - scraped-data:/congress
-  #   depends_on:
-  #     - mongo
-  # yoga_server:
-  #   build: server/.
-  #   ports:
-  #     - 4000:4000
-  #   environment:
-  #     - MONGO_URI
-  #   depends_on:
-  #     - mongo
 
 volumes:
   scraped-data:
-  # mongo-data:
   postgres-data:

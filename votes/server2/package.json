@@ -9,6 +9,7 @@
     "ioredis": "^5.0.0",
     "rate-limiter-flexible": "^3.0.0",
     "@graphile/depth-limit": "^0.2.0",
-    "graphql-query-complexity": "^0.12.0"
+    "graphql-query-complexity": "^0.12.0",
+    "pino": "^9.0.0"
   }
 }
