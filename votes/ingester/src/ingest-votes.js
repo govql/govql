@@ -23,6 +23,10 @@ import { pool } from './db.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
 
+// Pass --force to reprocess vote files that are already current in the DB.
+// Useful when the ingestion logic changes (e.g. this lis_id fix).
+const FORCE = process.argv.includes('--force');
+
 // ---------------------------------------------------------------------------
 // Valid category values per the schema CHECK constraint.
 // Falls back to 'unknown' for anything not in this set.
@@ -73,6 +77,7 @@ async function* walkVoteFiles(dataDir) {
 // Returns true if the vote is absent from the DB or has a newer updated_at.
 // ---------------------------------------------------------------------------
 async function needsIngestion(client, voteId, fileUpdatedAt) {
+  if (FORCE) return true;
   const { rows } = await client.query(
     `SELECT source_updated_at FROM votes WHERE vote_id = $1`,
     [voteId],
@@ -161,9 +166,9 @@ async function upsertVote(client, v) {
 // not present in the DB is silently dropped instead of throwing an FK error.
 // Unknown IDs are logged as a count for observability.
 // ---------------------------------------------------------------------------
-async function replacePositions(client, voteId, votes) {
+async function replacePositions(client, voteId, chamber, votes) {
   // Flatten all positions into parallel arrays for unnest.
-  const bioguides = [];
+  const memberIds = [];
   const positions = [];
   const parties   = [];
   const states    = [];
@@ -171,36 +176,42 @@ async function replacePositions(client, voteId, votes) {
   for (const [positionLabel, members] of Object.entries(votes ?? {})) {
     for (const member of members) {
       if (!member.id) continue;
-      bioguides.push(member.id);
+      memberIds.push(member.id);
       positions.push(positionLabel);
       parties.push(member.party ?? null);
       states.push(member.state ?? null);
     }
   }
 
-  if (bioguides.length === 0) return;
+  if (memberIds.length === 0) return;
 
   await client.query(
     'DELETE FROM vote_positions WHERE vote_id = $1',
     [voteId],
   );
 
-  // The JOIN filters to legislators that exist in the DB; unknown IDs are
-  // silently skipped. This handles VP tie-break votes and any scraper gaps.
+  // Senate vote files identify members by lis_id (from the Senate XML);
+  // House vote files use bioguide_id directly.
+  // The JOIN silently drops any ID not present in the legislators table
+  // (VP tie-breaks, historical gaps, etc.).
+  const isSenate = chamber === 's';
   const { rowCount } = await client.query(
-    `INSERT INTO vote_positions (vote_id, bioguide_id, position, party, state)
-     SELECT $1, v.bioguide_id, v.position, v.party, v.state
-     FROM unnest(
-       $2::text[], $3::text[], $4::text[], $5::text[]
-     ) AS v(bioguide_id, position, party, state)
-     JOIN legislators ON legislators.bioguide_id = v.bioguide_id`,
-    [voteId, bioguides, positions, parties, states],
+    isSenate
+      ? `INSERT INTO vote_positions (vote_id, bioguide_id, position, party, state)
+         SELECT $1, l.bioguide_id, v.position, v.party, v.state
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS v(member_id, position, party, state)
+         JOIN legislators l ON l.lis_id = v.member_id`
+      : `INSERT INTO vote_positions (vote_id, bioguide_id, position, party, state)
+         SELECT $1, l.bioguide_id, v.position, v.party, v.state
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS v(member_id, position, party, state)
+         JOIN legislators l ON l.bioguide_id = v.member_id`,
+    [voteId, memberIds, positions, parties, states],
   );
 
-  const skipped = bioguides.length - rowCount;
+  const skipped = memberIds.length - rowCount;
   if (skipped > 0) {
     console.warn(
-      `  ${voteId}: ${skipped} position(s) skipped (bioguide_id not in legislators table)`,
+      `  ${voteId}: ${skipped} position(s) skipped (member_id not in legislators table)`,
     );
   }
 }
@@ -218,7 +229,7 @@ async function processVoteFile(client, filePath) {
     return false;
   }
 
-  const { vote_id, votes, bill } = data;
+  const { vote_id, chamber, votes, bill } = data;
   if (!vote_id) {
     console.warn(`No vote_id in ${filePath} — skipping`);
     return false;
@@ -232,7 +243,7 @@ async function processVoteFile(client, filePath) {
     await client.query('BEGIN');
     if (bill?.bill_id) await upsertBillStub(client, bill);
     await upsertVote(client, data);
-    await replacePositions(client, vote_id, votes);
+    await replacePositions(client, vote_id, chamber, votes);
     await client.query('COMMIT');
     return true;
   } catch (err) {

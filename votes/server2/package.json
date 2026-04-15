@@ -1,15 +1,18 @@
 {
   "name": "postgraphile-yoga-app",
   "type": "module",
+  "overrides": {
+    "graphql": "^16.9.0"
+  },
   "dependencies": {
-    "graphql": "^16.0.0",
+    "graphql": "^16.9.0",
     "graphql-yoga": "^5.0.0",
     "postgraphile": "^4.13.0",
+    "postgraphile-plugin-connection-filter": "^2.3.0",
     "pg": "^8.0.0",
     "ioredis": "^5.0.0",
     "rate-limiter-flexible": "^3.0.0",
     "@graphile/depth-limit": "^0.2.0",
-    "graphql-query-complexity": "^0.12.0",
     "pino": "^9.0.0"
   }
 }

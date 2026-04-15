@@ -26,6 +26,9 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 
 RUN echo "/opt/theunitedstates.io/congress/" > /usr/local/lib/python3.9/dist-packages/congress.pth
 
+COPY ./scraper/update-legislators.sh /usr/local/bin/update-legislators.sh
+RUN chmod +x /usr/local/bin/update-legislators.sh
+
 COPY ./scraper/scrape_cron /etc/cron.d/scrape_cron
 RUN chmod 0644 /etc/cron.d/scrape_cron && crontab /etc/cron.d/scrape_cron
 

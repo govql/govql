@@ -1,7 +1,5 @@
 FROM node:22-alpine
 
-RUN apk add --no-cache cron
-
 WORKDIR /app
 
 COPY package.json ./
@@ -14,6 +12,6 @@ COPY src/ ./src/
 
 RUN mkdir -p /var/log
 
-# Save container env vars to /etc/environment at startup so cron jobs can
-# source them (cron does not inherit the parent process environment).
-CMD ["/bin/sh", "-c", "printenv > /etc/environment && cron -f"]
+# busybox crond (already in Alpine) runs in foreground with -f.
+# printenv saves the container's env vars so cron jobs can source them.
+CMD ["/bin/sh", "-c", "printenv > /etc/environment && crond -f"]

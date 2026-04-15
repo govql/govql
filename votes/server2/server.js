@@ -1,8 +1,13 @@
 import http from 'http';
 import { createYoga } from 'graphql-yoga';
-import { isNonNullType, isListType, getNamedType } from 'graphql';
+import {
+  GraphQLError,
+  execute as graphqlExecute,
+  isNonNullType, isListType, isObjectType, isInterfaceType, isUnionType,
+  getNamedType,
+} from 'graphql';
 import { useDepthLimit } from '@graphile/depth-limit';
-import { createComplexityLimitRule, simpleEstimator } from 'graphql-query-complexity';
+import { withPostGraphileContext } from 'postgraphile';
 import { buildSchema } from './schema.js';
 import { pool } from './db.js';
 import { rateLimiter } from './rateLimit.js';
@@ -42,6 +47,97 @@ function postgraphileEstimator({ field, args, childComplexity }) {
 
   // Single object or scalar — cheap.
   return 1 + childComplexity;
+}
+
+// =============================================================================
+// Complexity validation rule (inline — avoids graphql-query-complexity's
+// unreliable CJS/ESM interop)
+//
+// Walks the full operation at validation time, accumulating cost using the
+// estimator above. Fragment definitions are collected in a first pass so they
+// are available regardless of document order.
+// =============================================================================
+function sumComplexity(selections, parentType, fragments, estimator) {
+  let total = 0;
+  for (const sel of selections) {
+    if (sel.kind === 'Field') {
+      if (sel.name.value.startsWith('__')) continue; // skip introspection
+
+      const fieldDef =
+        parentType && (isObjectType(parentType) || isInterfaceType(parentType))
+          ? parentType.getFields()[sel.name.value]
+          : null;
+
+      const namedReturnType = fieldDef ? getNamedType(fieldDef.type) : null;
+      const childType =
+        namedReturnType &&
+        (isObjectType(namedReturnType) || isInterfaceType(namedReturnType) || isUnionType(namedReturnType))
+          ? namedReturnType
+          : null;
+
+      const childComplexity = sel.selectionSet
+        ? sumComplexity(sel.selectionSet.selections, childType, fragments, estimator)
+        : 0;
+
+      // Collect numeric arguments (first, last, etc.) for the estimator.
+      const args = {};
+      for (const arg of sel.arguments ?? []) {
+        if (arg.value.kind === 'IntValue') {
+          args[arg.name.value] = parseInt(arg.value.value, 10);
+        }
+      }
+
+      total += estimator({ field: fieldDef, args, childComplexity }) ?? 1;
+
+    } else if (sel.kind === 'InlineFragment') {
+      total += sumComplexity(sel.selectionSet.selections, parentType, fragments, estimator);
+
+    } else if (sel.kind === 'FragmentSpread') {
+      const frag = fragments[sel.name.value];
+      if (frag) total += sumComplexity(frag.selectionSet.selections, parentType, fragments, estimator);
+    }
+  }
+  return total;
+}
+
+function complexityLimitRule(maxComplexity, estimator) {
+  return function ComplexityLimitRule(context) {
+    return {
+      // Use the Document leave hook so all FragmentDefinitions are collected
+      // before we walk any OperationDefinitions.
+      Document: {
+        leave(node) {
+          const fragments = {};
+          const operations = [];
+
+          for (const def of node.definitions) {
+            if (def.kind === 'FragmentDefinition') fragments[def.name.value] = def;
+            else if (def.kind === 'OperationDefinition') operations.push(def);
+          }
+
+          const schema = context.getSchema();
+
+          for (const op of operations) {
+            const rootType =
+              op.operation === 'mutation'     ? schema.getMutationType()     :
+              op.operation === 'subscription' ? schema.getSubscriptionType() :
+                                               schema.getQueryType();
+
+            const complexity = sumComplexity(
+              op.selectionSet.selections, rootType, fragments, estimator,
+            );
+
+            if (complexity > maxComplexity) {
+              context.reportError(new GraphQLError(
+                `Query complexity ${complexity} exceeds the limit of ${maxComplexity}. ` +
+                'Use smaller page sizes or fewer nested fields.',
+              ));
+            }
+          }
+        },
+      },
+    };
+  };
 }
 
 // =============================================================================
@@ -122,27 +218,40 @@ const yoga = createYoga({
         logger.debug({ operationName }, 'graphql execute');
       },
     },
+
+    // withPostGraphileContext checks out a pg client from the pool and injects
+    // it into the GraphQL context as `pgClient`, which PostGraphile's resolvers
+    // require. Yoga v5 ignores a top-level `execute` option, so we hook in via
+    // the Envelop onExecute / setExecuteFn API instead.
+    {
+      onExecute({ args, setExecuteFn }) {
+        const { pgSettings } = args.contextValue ?? {};
+        setExecuteFn((executeArgs) =>
+          withPostGraphileContext(
+            { pgPool: pool, pgSettings },
+            (pgContext) => graphqlExecute({
+              ...executeArgs,
+              contextValue: { ...executeArgs.contextValue, ...pgContext },
+            }),
+          ),
+        );
+      },
+    },
   ],
 
   validationRules: [
-    createComplexityLimitRule(10_000, {
-      estimators: [
-        postgraphileEstimator,
-        simpleEstimator({ defaultComplexity: 1 }), // fallback for unhandled field types
-      ],
-    }),
+    complexityLimitRule(10_000, postgraphileEstimator),
   ],
 
   context: async ({ request }) => {
     const auth = request.headers.get('authorization');
-    // TODO: replace with real JWT verification when auth is added.
+    // TODO: replace with real JWT verification and per-role Postgres grants.
+    // pgSettings is picked up by the execute wrapper above and forwarded to
+    // withPostGraphileContext, which applies them as SET LOCAL on the connection.
     const user = auth ? { id: 1, role: 'app_user' } : null;
-    return {
-      pgSettings: {
-        role: user?.role ?? 'anonymous',
-        'jwt.claims.user_id': user?.id,
-      },
-    };
+    return user
+      ? { pgSettings: { role: user.role, 'jwt.claims.user_id': String(user.id) } }
+      : {};
   },
 });
 
