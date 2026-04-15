@@ -34,6 +34,18 @@ services:
       timeout: 3s
       retries: 5
 
+  ingester:
+    build:
+      context: .
+      dockerfile: ./ingester/Dockerfile
+    environment:
+      - DATABASE_URL
+    volumes:
+      - scraped-data:/congress
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   server:
     build: server2/.
     ports:

@@ -1,0 +1,5 @@
+# Ingest legislators once per day at 02:15 (scraper runs legislators at 02:00).
+15 2 * * * . /etc/environment; cd /app && node src/ingest-legislators.js >> /var/log/ingest.log 2>&1
+
+# Ingest votes every hour at :50 (scraper runs votes at :35; 15-min buffer).
+50 * * * * . /etc/environment; cd /app && node src/ingest-votes.js >> /var/log/ingest.log 2>&1
