@@ -20,6 +20,7 @@
 import fs from 'fs';
 import path from 'path';
 import { pool } from './db.js';
+import { logger } from './logger.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
 
@@ -49,7 +50,7 @@ async function* walkVoteFiles(dataDir) {
   const dataPath = path.join(dataDir, 'data');
 
   if (!fs.existsSync(dataPath)) {
-    console.warn(`Data directory not found: ${dataPath} — nothing to ingest`);
+    logger.warn(`Data directory not found: ${dataPath} — nothing to ingest`);
     return;
   }
 
@@ -210,33 +211,31 @@ async function replacePositions(client, voteId, chamber, votes) {
 
   const skipped = memberIds.length - rowCount;
   if (skipped > 0) {
-    console.warn(
-      `  ${voteId}: ${skipped} position(s) skipped (member_id not in legislators table)`,
-    );
+    logger.warn(`${voteId}: ${skipped} position(s) skipped (member_id not in legislators table)`);
   }
 }
 
 // ---------------------------------------------------------------------------
 // Process one vote file.
-// Returns true if the vote was (re-)ingested, false if skipped.
+// Returns 'ingested', 'skipped', or 'failed'.
 // ---------------------------------------------------------------------------
 async function processVoteFile(client, filePath) {
   let data;
   try {
     data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (err) {
-    console.error(`Failed to parse ${filePath}:`, err.message);
-    return false;
+    logger.error(`Failed to parse ${filePath}: ${err.message}`);
+    return 'failed';
   }
 
   const { vote_id, chamber, votes, bill } = data;
   if (!vote_id) {
-    console.warn(`No vote_id in ${filePath} — skipping`);
-    return false;
+    logger.warn(`No vote_id in ${filePath} — skipping`);
+    return 'failed';
   }
 
   if (!(await needsIngestion(client, vote_id, data.updated_at))) {
-    return false; // already up to date
+    return 'skipped';
   }
 
   try {
@@ -245,11 +244,11 @@ async function processVoteFile(client, filePath) {
     await upsertVote(client, data);
     await replacePositions(client, vote_id, chamber, votes);
     await client.query('COMMIT');
-    return true;
+    return 'ingested';
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(`Failed to ingest vote ${vote_id}:`, err.message);
-    return false;
+    logger.error(`Failed to ingest vote ${vote_id}: ${err.message}`);
+    return 'failed';
   }
 }
 
@@ -268,29 +267,30 @@ async function run() {
     );
     runId = rows[0].id;
 
-    let totalProcessed = 0;
-    let totalSkipped   = 0;
-    let totalFailed    = 0;
+    let totalIngested = 0;
+    let totalSkipped  = 0;
+    let totalFailed   = 0;
 
     for await (const filePath of walkVoteFiles(DATA_DIR)) {
-      const ingested = await processVoteFile(client, filePath);
-      if (ingested === true)  totalProcessed++;
-      else if (ingested === false) totalSkipped++;  // skipped or parse error counted here
+      const result = await processVoteFile(client, filePath);
+      if      (result === 'ingested') totalIngested++;
+      else if (result === 'skipped')  totalSkipped++;
+      else                            totalFailed++;
     }
 
     await client.query(
       `UPDATE ingestion_runs
        SET finished_at = now(), status = 'success', records_upserted = $1
        WHERE id = $2`,
-      [totalProcessed, runId],
+      [totalIngested, runId],
     );
 
-    console.log(
-      `Votes ingestion complete — ingested: ${totalProcessed}, ` +
-      `skipped (up to date): ${totalSkipped}`,
+    logger.info(
+      `Votes ingestion complete — ingested: ${totalIngested}, ` +
+      `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
     );
   } catch (err) {
-    console.error('Votes ingestion failed:', err.message);
+    logger.error(`Votes ingestion failed: ${err.message}`);
     if (runId) {
       await client.query(
         `UPDATE ingestion_runs

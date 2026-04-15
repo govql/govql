@@ -1,7 +1,8 @@
 /**
  * ingest-legislators.js
  *
- * Reads the YAML files produced by `usc-run legislators` and upserts them
+ * Reads the YAML files synced by the scraper's update-legislators.sh
+ * (which clones/pulls unitedstates/congress-legislators) and upserts them
  * into the `legislators` and `legislator_terms` tables.
  *
  * Dependency order: this script must run before ingest-votes.js because
@@ -16,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { pool } from './db.js';
+import { logger } from './logger.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
 
@@ -144,9 +146,9 @@ async function run() {
   const files = findLegislatorFiles();
 
   if (files.length === 0) {
-    console.error(
+    logger.error(
       `No legislator YAML files found under ${DATA_DIR}/data/legislators/. ` +
-      'Run "usc-run legislators" in the scraper container first.',
+      'Ensure the scraper service has run update-legislators.sh at least once.',
     );
     process.exit(1);
   }
@@ -167,13 +169,13 @@ async function run() {
     let totalFailed = 0;
 
     for (const file of files) {
-      console.log(`Processing ${path.basename(file)} …`);
+      logger.info(`Processing ${path.basename(file)} …`);
       const legislators = parseLegislatorFile(file);
 
       for (const leg of legislators) {
         const bioguideId = leg?.id?.bioguide;
         if (!bioguideId) {
-          console.warn('Skipping legislator record with no bioguide_id');
+          logger.warn('Skipping legislator record with no bioguide_id');
           totalFailed++;
           continue;
         }
@@ -186,7 +188,7 @@ async function run() {
           totalUpserted++;
         } catch (err) {
           await client.query('ROLLBACK');
-          console.error(`Failed to upsert legislator ${bioguideId}:`, err.message);
+          logger.error(`Failed to upsert legislator ${bioguideId}: ${err.message}`);
           totalFailed++;
         }
       }
@@ -199,11 +201,11 @@ async function run() {
       [totalUpserted, runId],
     );
 
-    console.log(
+    logger.info(
       `Legislators ingestion complete — upserted: ${totalUpserted}, failed: ${totalFailed}`,
     );
   } catch (err) {
-    console.error('Legislators ingestion failed:', err.message);
+    logger.error(`Legislators ingestion failed: ${err.message}`);
     if (runId) {
       await client.query(
         `UPDATE ingestion_runs

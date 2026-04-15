@@ -1,9 +1,9 @@
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY ingest_cron /etc/cron.d/ingest_cron
 RUN chmod 0644 /etc/cron.d/ingest_cron && crontab /etc/cron.d/ingest_cron

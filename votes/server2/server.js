@@ -31,6 +31,8 @@ import { logger } from './logger.js';
 // cross-product queries.
 // =============================================================================
 function postgraphileEstimator({ field, args, childComplexity }) {
+  if (!field) return 1 + childComplexity;
+
   const limit = args.first ?? args.last;
 
   if (limit != null) {
@@ -201,7 +203,7 @@ const yoga = createYoga({
           await rateLimiter.consume(ip);
         } catch {
           logger.warn({ ip }, 'rate limit exceeded');
-          throw new Error('Too many requests');
+          throw new Response('Too many requests', { status: 429 });
         }
       },
     },
