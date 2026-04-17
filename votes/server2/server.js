@@ -4,7 +4,6 @@ import { grafserv } from 'postgraphile/grafserv/node';
 import { PostGraphileAmberPreset } from 'postgraphile/presets/amber';
 import { makeV4Preset } from 'postgraphile/presets/v4';
 import { makePgService } from 'postgraphile/adaptors/pg';
-import { depthLimit } from '@graphile/depth-limit';
 import ConnectionFilterPlugin from 'postgraphile-plugin-connection-filter';
 import {
   GraphQLError,
@@ -18,6 +17,70 @@ import {
 import { pool } from './db.js';
 import { rateLimiter } from './rateLimit.js';
 import { logger } from './logger.js';
+
+// =============================================================================
+// Depth limit
+//
+// Counts the deepest nesting level of a query, ignoring introspection fields
+// (anything starting with __) entirely — they never touch the database so
+// there is no cost concern, and their inherently deep ofType chains would
+// otherwise trip the limit. The complexity budget below catches expensive
+// real queries independently.
+// =============================================================================
+function maxDepthOfSelections(selections, fragments) {
+  let max = 0;
+  for (const sel of selections) {
+    if (sel.kind === 'Field') {
+      if (sel.name.value.startsWith('__')) continue;
+      const child = sel.selectionSet
+        ? 1 + maxDepthOfSelections(sel.selectionSet.selections, fragments)
+        : 1;
+      if (child > max) max = child;
+    } else if (sel.kind === 'InlineFragment') {
+      const child = maxDepthOfSelections(sel.selectionSet.selections, fragments);
+      if (child > max) max = child;
+    } else if (sel.kind === 'FragmentSpread') {
+      const frag = fragments[sel.name.value];
+      if (frag) {
+        const child = maxDepthOfSelections(frag.selectionSet.selections, fragments);
+        if (child > max) max = child;
+      }
+    }
+  }
+  return max;
+}
+
+function depthLimitRule(maxDepth) {
+  return function DepthLimitRule(context) {
+    return {
+      Document: {
+        leave(node) {
+          const fragments = {};
+          const operations = [];
+          for (const def of node.definitions) {
+            if (def.kind === 'FragmentDefinition')
+              fragments[def.name.value] = def;
+            else if (def.kind === 'OperationDefinition') operations.push(def);
+          }
+          for (const op of operations) {
+            const depth = maxDepthOfSelections(
+              op.selectionSet.selections,
+              fragments,
+            );
+            if (depth > maxDepth) {
+              context.reportError(
+                new GraphQLError(
+                  `Query depth ${depth} exceeds the limit of ${maxDepth}. ` +
+                    'Use fewer levels of nesting.',
+                ),
+              );
+            }
+          }
+        },
+      },
+    };
+  };
+}
 
 // =============================================================================
 // Complexity estimator
@@ -189,7 +252,9 @@ const validationRulesPlugin = {
         event.validationRules = [
           ...event.validationRules,
           // Hard depth cap — cheap check that runs before complexity counting.
-          depthLimit({ maxDepth: 10 }),
+          // Introspection fields (__schema, __type, …) are excluded; see the
+          // depthLimitRule implementation above for the reasoning.
+          depthLimitRule(10),
           // Per-operation complexity budget.
           complexityLimitRule(10_000_000_000, postgraphileEstimator),
         ];

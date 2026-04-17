@@ -6,10 +6,34 @@ services:
     restart: always
     volumes:
       - scraped-data:/congress
+    deploy:
+      resources:
+        limits:
+          memory: 96M
 
   postgres:
     image: postgres:18-alpine
     restart: always
+    # Tuned for a 1 GB host. Key changes from defaults:
+    #   shared_buffers      64 MB  (default 128 MB) — main query cache
+    #   effective_cache_size 256 MB — planner hint for OS page cache available
+    #   work_mem             2 MB  (default 4 MB)  — per-sort/hash allocation
+    #   maintenance_work_mem 32 MB (default 64 MB) — VACUUM / CREATE INDEX
+    #   max_connections      25    (default 100)   — server pool 10 + ingester 5
+    #                                                 + 3 reserved + headroom
+    #   wal_buffers          4 MB  — explicit (auto would be ~2 MB here)
+    #   checkpoint_completion_target 0.9 — spread writes, reduce I/O spikes
+    #   random_page_cost     1.1   — SSD: favour index scans over seq scans
+    command: >
+      postgres
+        -c shared_buffers=64MB
+        -c effective_cache_size=256MB
+        -c work_mem=2MB
+        -c maintenance_work_mem=32MB
+        -c max_connections=25
+        -c wal_buffers=4MB
+        -c checkpoint_completion_target=0.9
+        -c random_page_cost=1.1
     environment:
       - POSTGRES_USER
       - POSTGRES_PASSWORD
@@ -18,31 +42,48 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./db:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   redis:
     image: redis:8-alpine
     restart: always
+    # Cap in-memory data at 32 MB; evict least-recently-used keys when full.
+    # Rate-limiting counters are ephemeral so LRU eviction is safe here.
+    command: redis-server --maxmemory 32mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 48M
 
   ingester:
     build: ./ingester
     restart: always
     environment:
       - DATABASE_URL
+      # Cap the V8 heap — the ingester is mostly idle so 64 MB is ample.
+      - NODE_OPTIONS=--max-old-space-size=64
     volumes:
       - scraped-data:/congress
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 96M
 
   server:
     build: ./server2
@@ -53,11 +94,18 @@ services:
       - REDIS_URL
       - ENABLE_GRAPHIQL
       - LOG_LEVEL
+      # Cap the V8 heap. PostGraphile v5 is lean; 128 MB handles normal load
+      # and the complexity budget prevents runaway query allocations.
+      - NODE_OPTIONS=--max-old-space-size=128
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 180M
 
 volumes:
   scraped-data:
