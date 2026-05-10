@@ -58,9 +58,9 @@ done
 
 ## Deploying to DigitalOcean
 
-### 1. Create and configure the droplet
+### 1. Root-only setup
 
-Create a 1 GB Droplet running Ubuntu 24.04. Then SSH in and run:
+Create a 1 GB Droplet running Ubuntu 24.04. SSH in as root and run:
 
 ```bash
 # Swap (required — RAM is too constrained without it)
@@ -80,77 +80,20 @@ ufw enable
 
 # Docker
 curl -fsSL https://get.docker.com | sh
-```
 
-### 2. Point DNS to the droplet
+# Node.js (needed to build the Docusaurus site)
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs
 
-In your Gandi DNS settings, create A records for both `govql.us` and `api.govql.us`
-pointing to the droplet's IP address. Wait for propagation before continuing.
+# Create a dedicated user and give it Docker access
+adduser --disabled-password --gecos "" govql
+usermod -aG docker govql
 
-### 3. Obtain a wildcard TLS certificate
+# Create app directory owned by govql
+mkdir -p /opt/govql
+chown govql:govql /opt/govql
 
-```bash
-apt install python3-certbot-dns-gandi
-
-mkdir -p /root/.secrets/certbot
-tee /root/.secrets/certbot/gandi.ini <<EOF
-dns_gandi_api_key = YOUR_GANDI_API_KEY
-EOF
-chmod 600 /root/.secrets/certbot/gandi.ini
-
-certbot certonly \
-  --authenticator dns-gandi \
-  --dns-gandi-credentials /root/.secrets/certbot/gandi.ini \
-  -d govql.us -d '*.govql.us'
-```
-
-### 4. Install dotenvx and clone the repo
-
-```bash
-curl -fsS https://dotenvx.sh | sh
-
-git clone https://github.com/nathangross/govql.git /opt/govql
-```
-
-### 5. Add secrets to the droplet
-
-Copy your `.env.keys` file to the droplet (never commit this file):
-
-```bash
-# Run this locally
-scp votes/.env.keys root@YOUR_DROPLET_IP:/opt/govql/votes/.env.keys
-```
-
-### 6. Build the Docusaurus site
-
-Run this locally, then copy the build output to the droplet:
-
-```bash
-cd docs && npm run build
-
-scp -r build root@YOUR_DROPLET_IP:/opt/govql/docs/build
-```
-
-### 7. Set ENABLE_GRAPHIQL
-
-In `votes/.env`, set:
-
-```
-ENABLE_GRAPHIQL=true
-```
-
-### 8. Start the stack
-
-```bash
-cd /opt/govql/votes
-dotenvx run -- docker compose up --build -d
-```
-
-The API is live at `https://api.govql.us/graphql` and the site at `https://govql.us`.
-
-### 9. Auto-start on reboot
-
-```bash
+# Systemd service (runs as govql, not root)
 tee /etc/systemd/system/govql.service <<EOF
 [Unit]
 Description=GovQL
@@ -158,7 +101,8 @@ After=docker.service
 Requires=docker.service
 
 [Service]
-WorkingDirectory=/opt/govql/votes
+User=govql
+WorkingDirectory=/opt/govql/us-congress
 ExecStart=dotenvx run -- docker compose up
 ExecStop=docker compose down
 Restart=always
@@ -168,12 +112,119 @@ WantedBy=multi-user.target
 EOF
 
 systemctl enable govql
+
+# Disable root SSH login — verify you can still SSH in as nate first!
+# Test with: ssh nate@YOUR_DROPLET_IP (in a separate terminal before running this)
+sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+systemctl reload ssh
 ```
 
-### 10. Certificate renewal
+The `nate` user already has SSH access. For all remaining steps, switch to the `govql` user via:
 
-Add to root's crontab (`crontab -e`):
+```bash
+sudo -u govql -i
+```
+
+`nate` can use this any time to act as `govql` without needing a separate SSH session.
+
+### 2. Point DNS to the droplet
+
+In your Gandi DNS settings, set the following records pointing to the droplet's IP and wait for propagation before continuing:
+
+| Type  | Name  | Value                                    |
+|-------|-------|------------------------------------------|
+| A     | @     | YOUR_DROPLET_IPV4                        |
+| AAAA  | @     | YOUR_DROPLET_IPV6                        |
+| CNAME | www   | govql.us.                                |
+
+### 3. Clone the repo and add secrets
+
+GitHub requires a Personal Access Token (PAT) or SSH key — password auth is not supported.
+
+```bash
+# Option A: PAT (generate at https://github.com/settings/tokens/new with repo scope)
+git clone https://YOUR_PAT@github.com/govql/govql.git /opt/govql
+
+# Option B: SSH (add your public key to GitHub → Settings → SSH keys first)
+git clone git@github.com:govql/govql.git /opt/govql
+```
+
+Copy your `.env.keys` file to the droplet (never commit this file):
+
+```bash
+# Run this locally
+scp us-congress/.env.keys govql@YOUR_DROPLET_IP:/opt/govql/us-congress/.env.keys
+```
+
+### 4. Install dotenvx
+
+```bash
+mkdir -p ~/.local/bin
+curl -fsS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### 5. Obtain a wildcard TLS certificate
+
+Use [acme.sh](https://github.com/acmesh-official/acme.sh) — certbot's Python dependencies conflict on Ubuntu 24.04.
+
+Create a Personal Access Token at Gandi → Settings → Security with the "Manage domain technical configurations" permission, then:
+
+```bash
+curl https://get.acme.sh | sh -s email=YOUR_EMAIL
+source ~/.bashrc
+
+export GANDI_LIVEDNS_TOKEN="YOUR_GANDI_PAT"
+
+~/.acme.sh/acme.sh --issue --dns dns_gandi_livedns -d govql.us -d '*.govql.us'
+
+# Install certs to the path the stack expects
+mkdir -p /opt/govql/certs/live/govql.us
+~/.acme.sh/acme.sh --install-cert -d govql.us \
+  --cert-file /opt/govql/certs/live/govql.us/cert.pem \
+  --key-file /opt/govql/certs/live/govql.us/privkey.pem \
+  --fullchain-file /opt/govql/certs/live/govql.us/fullchain.pem
+```
+
+acme.sh auto-installs a renewal cron job — no further setup needed.
+
+### 6. Build the Docusaurus site
+
+```bash
+cd /opt/govql/us-congress/docs
+npm install
+npm run build
+```
+
+### 7. Set ENABLE_GRAPHIQL
+
+In `/opt/govql/us-congress/.env`, set:
 
 ```
-0 3 * * * certbot renew --pre-hook "docker compose -f /opt/govql/votes/compose.yml stop nginx" --post-hook "docker compose -f /opt/govql/votes/compose.yml start nginx" --quiet
+ENABLE_GRAPHIQL=true
+```
+
+### 8. Start the stack
+
+```bash
+cd /opt/govql/us-congress
+dotenvx run -- docker compose up --build -d
+```
+
+The API is live at `https://api.govql.us/graphql` and the site at `https://govql.us`.
+
+### 9. Populate the database
+
+The scrapers and ingesters run on cron schedules, so on a fresh deployment you need to trigger the initial run manually:
+
+```bash
+# Scrape legislators (clones repo on first run)
+docker exec us-congress-scraper-1 /usr/local/bin/update-legislators.sh
+
+# Scrape current session votes
+docker exec us-congress-scraper-1 /usr/local/bin/usc-run votes
+
+# Ingest into PostgreSQL (legislators must go first)
+docker exec us-congress-ingester-1 sh -c "node /app/src/ingest-legislators.js && node /app/src/ingest-votes.js"
 ```
