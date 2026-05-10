@@ -19,6 +19,23 @@ dotenvx run -- docker compose -f compose.yml -f compose.dev.yml up --build postg
 
 The GraphQL API and Ruru explorer are available at `http://localhost:4000/graphql`.
 
+### First-run: populate the database
+
+The scrapers and ingesters run on cron schedules (votes every hour, legislators once daily at 02:00), so on a fresh volume you need to trigger the initial run manually. Do this after the stack is up:
+
+```bash
+# 1. Scrape legislators (clones repo on first run; subsequent runs pull latest)
+docker exec us-congress-scraper-1 /usr/local/bin/update-legislators.sh
+
+# 2. Scrape all historical vote data (slow — can take 10–30 min on first run)
+docker exec us-congress-scraper-1 /usr/local/bin/usc-run votes
+
+# 3. Ingest into PostgreSQL (legislators must go first — vote positions FK against them)
+docker exec us-congress-ingester-1 sh -c "node /app/src/ingest-legislators.js && node /app/src/ingest-votes.js"
+```
+
+The same sequence works any time you need to force a re-sync (e.g. after recreating volumes).
+
 For the Docusaurus site, run its dev server separately from the `docs/` directory:
 
 ```bash
@@ -26,6 +43,17 @@ cd ../docs
 npm run start   # http://localhost:3000
 ```
 
+### Backfilling historical data
+
+To backfill historical congressional data, here's a helpful bit of shell script:
+```bash
+for congress in $(seq 119 -1 93); do
+  echo "=== Scraping Congress $congress ==="
+  docker exec us-congress-scraper-1 /usr/local/bin/usc-run votes --congress=$congress --debug
+  echo "=== Ingesting Congress $congress ==="
+  docker exec us-congress-ingester-1 node /app/src/ingest-votes.js
+done
+```
 ---
 
 ## Deploying to DigitalOcean
