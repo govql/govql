@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
-// const API_URL = 'https://api.govql.us/graphql';
-const API_URL = 'http://localhost:4000/graphql';
+const API_URL = 'https://api.govql.us/graphql';
+// const API_URL = 'http://localhost:4000/graphql';
 
 const US_STATES = [
   { code: 'AL', name: 'Alabama' },
@@ -167,7 +167,10 @@ const POSITION_STYLES: Record<string, { background: string; color: string }> = {
 
 function positionBadge(position: string | undefined) {
   const pos = position ?? '—';
-  const style = POSITION_STYLES[pos] ?? { background: '#e2e3e5', color: '#383d41' };
+  const style = POSITION_STYLES[pos] ?? {
+    background: '#e2e3e5',
+    color: '#383d41',
+  };
   return (
     <span
       style={{
@@ -226,9 +229,9 @@ export default function NominationVotes(): ReactNode {
   const [votesLoading, setVotesLoading] = useState(false);
   const [votesError, setVotesError] = useState<string | null>(null);
 
-  const congresses = Array.from(new Set(sessionData.map((s) => s.congress))).sort(
-    (a, b) => b - a
-  );
+  const congresses = Array.from(
+    new Set(sessionData.map((s) => s.congress))
+  ).sort((a, b) => b - a);
 
   const availableYears =
     selectedCongress !== null
@@ -315,12 +318,18 @@ export default function NominationVotes(): ReactNode {
         <div>
           <label
             htmlFor="congress-select"
-            style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem' }}
+            style={{
+              display: 'block',
+              fontWeight: 600,
+              marginBottom: '0.35rem',
+            }}
           >
             Congress
           </label>
           {sessionsLoading ? (
-            <span style={{ color: 'var(--ifm-color-emphasis-600)' }}>Loading…</span>
+            <span style={{ color: 'var(--ifm-color-emphasis-600)' }}>
+              Loading…
+            </span>
           ) : sessionsError ? (
             <span style={{ color: 'red' }}>Error: {sessionsError}</span>
           ) : (
@@ -328,7 +337,9 @@ export default function NominationVotes(): ReactNode {
               id="congress-select"
               value={selectedCongress ?? ''}
               onChange={(e) =>
-                setSelectedCongress(e.target.value ? Number(e.target.value) : null)
+                setSelectedCongress(
+                  e.target.value ? Number(e.target.value) : null
+                )
               }
               style={selectStyle}
             >
@@ -345,10 +356,19 @@ export default function NominationVotes(): ReactNode {
         <div>
           <label
             htmlFor="year-select"
-            style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem' }}
+            style={{
+              display: 'block',
+              fontWeight: 600,
+              marginBottom: '0.35rem',
+            }}
           >
             Year{' '}
-            <span style={{ fontWeight: 400, color: 'var(--ifm-color-emphasis-600)' }}>
+            <span
+              style={{
+                fontWeight: 400,
+                color: 'var(--ifm-color-emphasis-600)',
+              }}
+            >
               (optional)
             </span>
           </label>
@@ -371,7 +391,11 @@ export default function NominationVotes(): ReactNode {
         <div>
           <label
             htmlFor="state-select"
-            style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem' }}
+            style={{
+              display: 'block',
+              fontWeight: 600,
+              marginBottom: '0.35rem',
+            }}
           >
             State
           </label>
@@ -424,12 +448,24 @@ export default function NominationVotes(): ReactNode {
 
           <div style={{ overflowX: 'auto' }}>
             <table
-              style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}
+              style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: '0.9rem',
+              }}
             >
               <thead>
-                <tr style={{ borderBottom: '2px solid var(--ifm-color-emphasis-300)' }}>
+                <tr
+                  style={{
+                    borderBottom: '2px solid var(--ifm-color-emphasis-300)',
+                  }}
+                >
                   <th
-                    style={{ textAlign: 'left', padding: '0.5rem 0.75rem', minWidth: 280 }}
+                    style={{
+                      textAlign: 'left',
+                      padding: '0.5rem 0.75rem',
+                      minWidth: 280,
+                    }}
                   >
                     Nomination
                   </th>
@@ -468,32 +504,54 @@ export default function NominationVotes(): ReactNode {
               <tbody>
                 {votes.map((vote) => {
                   const posMap = new Map(
-                    vote.votePositionsByVoteId.nodes.map((p) => [p.bioguideId, p])
+                    vote.votePositionsByVoteId.nodes.map((p) => [
+                      p.bioguideId,
+                      p,
+                    ])
                   );
                   return (
                     <tr
                       key={vote.voteId}
-                      style={{ borderBottom: '1px solid var(--ifm-color-emphasis-200)' }}
+                      style={{
+                        borderBottom: '1px solid var(--ifm-color-emphasis-200)',
+                      }}
                     >
                       <td style={{ padding: '0.5rem 0.75rem' }}>
                         {vote.sourceUrl ? (
-                          <a href={vote.sourceUrl} target="_blank" rel="noreferrer">
+                          <a
+                            href={vote.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
                             {vote.question || vote.voteId}
                           </a>
                         ) : (
                           vote.question || vote.voteId
                         )}
                       </td>
-                      <td style={{ padding: '0.5rem 0.75rem', whiteSpace: 'nowrap' }}>
+                      <td
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
                         {formatDate(vote.votedAt)}
                       </td>
-                      <td style={{ padding: '0.5rem 0.75rem', whiteSpace: 'nowrap' }}>
+                      <td
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
                         {vote.result ?? '—'}
                       </td>
                       {senators.map((s) => (
                         <td
                           key={s.bioguideId}
-                          style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}
+                          style={{
+                            padding: '0.5rem 0.75rem',
+                            textAlign: 'center',
+                          }}
                         >
                           {positionBadge(posMap.get(s.bioguideId)?.position)}
                         </td>
