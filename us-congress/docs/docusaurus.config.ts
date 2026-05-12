@@ -88,9 +88,10 @@ const config: Config = {
           label: 'Sources',
         },
         {
-          to: '/nominations',
-          label: 'Nominations',
+          type: 'docSidebar',
+          sidebarId: 'examplesSidebar',
           position: 'left',
+          label: 'Live Examples',
         },
         {
           to: '/issues',

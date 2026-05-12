@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 
-// const API_URL = 'https://api.govql.us/graphql';
-const API_URL = 'http://localhost:4000/graphql';
+const API_URL = 'https://api.govql.us/graphql';
+// const API_URL = 'http://localhost:4000/graphql';
 
 const US_STATES = [
   { code: 'AL', name: 'Alabama' },
