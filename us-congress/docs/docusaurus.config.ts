@@ -88,6 +88,12 @@ const config: Config = {
           label: 'Sources',
         },
         {
+          type: 'docSidebar',
+          sidebarId: 'examplesSidebar',
+          position: 'left',
+          label: 'Live Examples',
+        },
+        {
           to: '/issues',
           label: 'Issues',
           position: 'right',
