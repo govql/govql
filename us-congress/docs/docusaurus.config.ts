@@ -88,6 +88,11 @@ const config: Config = {
           label: 'Sources',
         },
         {
+          to: '/nominations',
+          label: 'Nominations',
+          position: 'left',
+        },
+        {
           to: '/issues',
           label: 'Issues',
           position: 'right',
