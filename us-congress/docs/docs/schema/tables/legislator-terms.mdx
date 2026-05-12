@@ -1,0 +1,69 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: LegislatorTerm
+sidebar_position: 2
+---
+
+# LegislatorTerm
+
+Each row is one term of service. A legislator may have many terms across both chambers.
+
+**GraphQL type:** `LegislatorTerm` · **Connection:** `LegislatorTermsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allLegislatorTerms(filter, orderBy, first, last, before, after)` | `LegislatorTermsConnection` | Paginated list with filtering and ordering |
+| `legislatorTermById(id: BigInt!)` | `LegislatorTerm` | Look up by primary key |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `bioguideId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `termType` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span>. One of: `rep`, `sen` |
+| `startDate` | `Date` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `endDate` | `Date` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `state` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `party` | `String` |  |
+| `caucus` | `String` |  |
+| `district` | `Int` | House only. 0 = at-large district. -1 = unknown in historical data. |
+| `senateClass` | `Int` | One of: `1`, `2`, `3` |
+| `stateRank` | `String` | One of: `junior`, `senior` |
+| `how` | `String` |  |
+| `url` | `String` |  |
+| `address` | `String` |  |
+| `phone` | `String` |  |
+| `office` | `String` |  |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `legislatorByBioguideId` | `Legislator` | `bioguideId` |
+
+## Example
+
+```graphql
+{
+  allLegislatorTerms(
+    filter: { state: { equalTo: "TX" }, termType: { equalTo: "sen" } }
+    orderBy: START_DATE_DESC
+    first: 10
+  ) {
+    nodes {
+      startDate
+      endDate
+      party
+      state
+      legislatorByBioguideId {
+        officialFull
+      }
+    }
+  }
+}
+```

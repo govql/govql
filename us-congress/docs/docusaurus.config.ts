@@ -94,6 +94,12 @@ const config: Config = {
           label: 'Live Examples',
         },
         {
+          type: 'docSidebar',
+          sidebarId: 'schemaSidebar',
+          position: 'left',
+          label: 'API Reference',
+        },
+        {
           to: '/issues',
           label: 'Issues',
           position: 'right',
@@ -114,6 +120,23 @@ const config: Config = {
             {
               label: 'Federal',
               to: '/docs/sources/Federal/votes',
+            },
+          ],
+        },
+        {
+          title: 'API Reference',
+          items: [
+            {
+              label: 'Schema Overview',
+              to: '/docs/schema',
+            },
+            {
+              label: 'Legislators',
+              to: '/docs/schema/tables/legislators',
+            },
+            {
+              label: 'Votes',
+              to: '/docs/schema/tables/votes',
             },
           ],
         },

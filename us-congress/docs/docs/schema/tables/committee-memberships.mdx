@@ -1,0 +1,56 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: CommitteeMembership
+sidebar_position: 9
+---
+
+# CommitteeMembership
+
+**GraphQL type:** `CommitteeMembership` · **Connection:** `CommitteeMembershipsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allCommitteeMemberships(filter, orderBy, first, last, before, after)` | `CommitteeMembershipsConnection` | Paginated list with filtering and ordering |
+| `committeeMembershipById(id: BigInt!)` | `CommitteeMembership` | Look up by primary key |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `thomasId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `bioguideId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `party` | `String` | One of: `majority`, `minority` |
+| `rank` | `Int` |  |
+| `title` | `String` |  |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `committeeByThomasId` | `Committee` | `thomasId` |
+| `legislatorByBioguideId` | `Legislator` | `bioguideId` |
+
+## Example
+
+```graphql
+{
+  allCommitteeMemberships(
+    filter: { thomasId: { equalTo: "SSEG" } }
+    orderBy: RANK_ASC
+  ) {
+    nodes {
+      title
+      party
+      rank
+      legislatorByBioguideId {
+        officialFull
+      }
+    }
+  }
+}
+```

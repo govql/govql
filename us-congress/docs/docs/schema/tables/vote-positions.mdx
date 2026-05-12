@@ -1,0 +1,59 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: VotePosition
+sidebar_position: 4
+---
+
+# VotePosition
+
+The individual yea/nay/abstain position of each legislator on each roll call vote. Highest-volume table.
+
+**GraphQL type:** `VotePosition` · **Connection:** `VotePositionsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allVotePositions(filter, orderBy, first, last, before, after)` | `VotePositionsConnection` | Paginated list with filtering and ordering |
+| `votePositionById(id: BigInt!)` | `VotePosition` | Look up by primary key |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `voteId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `bioguideId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `position` | `String` | The recorded vote position. Values: Yea, Nay, Not Voting, Present, VP (vice presidential tie-breaker). <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `party` | `String` | Party at time of vote (snapshotted from upstream data to avoid joins for common analytics). |
+| `state` | `String` |  |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `voteByVoteId` | `Vote` | `voteId` |
+| `legislatorByBioguideId` | `Legislator` | `bioguideId` |
+
+## Example
+
+```graphql
+{
+  allVotePositions(
+    filter: {
+      voteId: { equalTo: "s83-119.2025" }
+    }
+  ) {
+    nodes {
+      position
+      party
+      state
+      legislatorByBioguideId {
+        officialFull
+      }
+    }
+  }
+}
+```
