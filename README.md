@@ -13,4 +13,4 @@ and extract insights from it. This project is an attempt to rectify that.
 - **API**: [api.govql.us/graphql](https://api.govql.us/graphql) — GraphQL API with Ruru explorer
 - **Site**: [govql.us](https://govql.us) — documentation and usage guide
 
-See [votes/README.md](votes/README.md) for local development and deployment instructions.
+See [us-congress/README.md](us-congress/README.md) for local development and deployment instructions.
