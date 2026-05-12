@@ -1,0 +1,77 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: Bill
+sidebar_position: 5
+---
+
+# Bill
+
+Legislation referenced by roll call votes. Not a comprehensive bill database — populated from vote cross-references.
+
+**GraphQL type:** `Bill` · **Connection:** `BillsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allBills(filter, orderBy, first, last, before, after)` | `BillsConnection` | Paginated list with filtering and ordering |
+| `billById(id: BigInt!)` | `Bill` | Look up by primary key |
+| `billByBillId(billId: String!)` | `Bill` | Look up by unique `billId` |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `billId` | `String` | Canonical ID in the form [bill_type][number]-[congress], e.g. hr3590-111. <span style={{background:'#6c757d',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>unique</span> <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `billType` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span>. One of: `hr`, `hres`, `hjres`, `hconres`, `s`, `sres`, `sjres`, `sconres` |
+| `billNumber` | `Int` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `congress` | `Int` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `introducedAt` | `Date` |  |
+| `officialTitle` | `String` |  |
+| `shortTitle` | `String` |  |
+| `popularTitle` | `String` |  |
+| `status` | `String` | Current bill status code per the unitedstates/congress taxonomy (INTRODUCED, REFERRED, ENACTED:SIGNED, etc.). |
+| `statusAt` | `Datetime` |  |
+| `sponsorBioguideId` | `String` |  <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `enactedAsLawType` | `String` |  |
+| `enactedAsNumber` | `String` |  |
+| `sourceUpdatedAt` | `Datetime` |  |
+| `createdAt` | `Datetime` |  |
+| `updatedAt` | `Datetime` |  |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `legislatorBySponsorBioguideId` | `Legislator` *(nullable)* | `sponsorBioguideId` |
+
+### Has many
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `votesByRelatedBillId` | `VotesConnection` | `relatedBillId` |
+| `billCosponsorsByBillId` | `BillCosponsorsConnection` | `billId` |
+| `billCommitteesByBillId` | `BillCommitteesConnection` | `billId` |
+
+## Example
+
+```graphql
+{
+  allBills(
+    filter: { congress: { equalTo: 119 }, billType: { equalTo: "hr" } }
+    orderBy: INTRODUCED_AT_DESC
+    first: 10
+  ) {
+    nodes {
+      billId
+      officialTitle
+      shortTitle
+      status
+      introducedAt
+    }
+  }
+}
+```

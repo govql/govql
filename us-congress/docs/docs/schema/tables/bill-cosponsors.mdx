@@ -1,0 +1,54 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: BillCosponsor
+sidebar_position: 7
+---
+
+# BillCosponsor
+
+**GraphQL type:** `BillCosponsor` · **Connection:** `BillCosponsorsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allBillCosponsors(filter, orderBy, first, last, before, after)` | `BillCosponsorsConnection` | Paginated list with filtering and ordering |
+| `billCosponsorById(id: BigInt!)` | `BillCosponsor` | Look up by primary key |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `billId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `bioguideId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `originalCosponsor` | `Boolean` |  |
+| `sponsoredAt` | `Date` |  |
+| `withdrawnAt` | `Date` |  |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `billByBillId` | `Bill` | `billId` |
+| `legislatorByBioguideId` | `Legislator` | `bioguideId` |
+
+## Example
+
+```graphql
+{
+  allBillCosponsors(
+    filter: { billId: { equalTo: "hr3590-111" } }
+  ) {
+    nodes {
+      originalCosponsor
+      sponsoredAt
+      legislatorByBioguideId {
+        officialFull
+      }
+    }
+  }
+}
+```

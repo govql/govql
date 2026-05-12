@@ -1,0 +1,75 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: Legislator
+sidebar_position: 1
+---
+
+# Legislator
+
+One row per person who has ever served in Congress. Bioguide ID is the canonical primary key used across all unitedstates/* datasets.
+
+**GraphQL type:** `Legislator` · **Connection:** `LegislatorsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allLegislators(filter, orderBy, first, last, before, after)` | `LegislatorsConnection` | Paginated list with filtering and ordering |
+| `legislatorByBioguideId(bioguideId: String!)` | `Legislator` | Look up by primary key |
+| `legislatorByThomasId(thomasId: String!)` | `Legislator` | Look up by unique `thomasId` |
+| `legislatorByLisId(lisId: String!)` | `Legislator` | Look up by unique `lisId` |
+| `legislatorByGovtrackId(govtrackId: Int!)` | `Legislator` | Look up by unique `govtrackId` |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `bioguideId` | `String` | Canonical legislator identifier from the Congressional Biographical Directory. Use this as the stable cross-system key. <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `thomasId` | `String` |  <span style={{background:'#6c757d',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>unique</span> |
+| `lisId` | `String` | Used in Senate roll call XML to identify members. Essential for matching Senate vote records. <span style={{background:'#6c757d',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>unique</span> |
+| `govtrackId` | `Int` |  <span style={{background:'#6c757d',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>unique</span> |
+| `opensecretsId` | `String` |  |
+| `votesmartId` | `Int` |  |
+| `icpsrId` | `Int` |  |
+| `cspanId` | `Int` |  |
+| `firstName` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `middleName` | `String` |  |
+| `lastName` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `nameSuffix` | `String` |  |
+| `nickname` | `String` |  |
+| `officialFull` | `String` |  |
+| `birthday` | `Date` |  |
+| `gender` | `String` | One of: `M`, `F` |
+| `createdAt` | `Datetime` |  |
+| `updatedAt` | `Datetime` |  |
+
+## Relationships
+
+### Has many
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `legislatorTermsByBioguideId` | `LegislatorTermsConnection` | `bioguideId` |
+| `billsBySponsorBioguideId` | `BillsConnection` | `sponsorBioguideId` |
+| `votePositionsByBioguideId` | `VotePositionsConnection` | `bioguideId` |
+| `billCosponsorsByBioguideId` | `BillCosponsorsConnection` | `bioguideId` |
+| `committeeMembershipsByBioguideId` | `CommitteeMembershipsConnection` | `bioguideId` |
+
+## Example
+
+```graphql
+{
+  allLegislators(
+    filter: { lastName: { equalTo: "Warren" } }
+    orderBy: LAST_NAME_ASC
+    first: 5
+  ) {
+    nodes {
+      bioguideId
+      officialFull
+      birthday
+      gender
+    }
+  }
+}
+```

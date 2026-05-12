@@ -1,0 +1,78 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: Vote
+sidebar_position: 3
+---
+
+# Vote
+
+One row per roll call vote event. The vote_id is the canonical identifier from unitedstates/congress (e.g. h202-113.2013).
+
+**GraphQL type:** `Vote` · **Connection:** `VotesConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allVotes(filter, orderBy, first, last, before, after)` | `VotesConnection` | Paginated list with filtering and ordering |
+| `voteById(id: BigInt!)` | `Vote` | Look up by primary key |
+| `voteByVoteId(voteId: String!)` | `Vote` | Look up by unique `voteId` |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `voteId` | `String` | Canonical vote identifier in the form [chamber][number]-[congress].[session], e.g. h202-113.2013. <span style={{background:'#6c757d',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>unique</span> <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `chamber` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span>. One of: `h`, `s` |
+| `congress` | `Int` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `session` | `String` | Calendar year string. Sessions roughly follow calendar years but are bounded by Congress start/end dates. <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `number` | `Int` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `votedAt` | `Datetime` |  |
+| `question` | `String` |  |
+| `voteType` | `String` |  |
+| `category` | `String` | Normalised vote category. One of: passage, amendment, cloture, nomination, treaty, recommit, quorum, leadership, conviction, veto-override, procedural, unknown. |
+| `result` | `String` |  |
+| `resultText` | `String` |  |
+| `requires` | `String` |  |
+| `relatedBillId` | `String` |  <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `sourceUrl` | `String` | Canonical URL of the upstream source — suitable for linking users to the official primary source. |
+| `sourceUpdatedAt` | `Datetime` |  |
+| `createdAt` | `Datetime` |  |
+| `updatedAt` | `Datetime` |  |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `billByRelatedBillId` | `Bill` *(nullable)* | `relatedBillId` |
+
+### Has many
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `votePositionsByVoteId` | `VotePositionsConnection` | `voteId` |
+
+## Example
+
+```graphql
+{
+  allVotes(
+    filter: {
+      category: { equalTo: "nomination" }
+      chamber: { equalTo: "s" }
+    }
+    orderBy: VOTED_AT_DESC
+    first: 10
+  ) {
+    nodes {
+      voteId
+      votedAt
+      question
+      result
+    }
+  }
+}
+```
