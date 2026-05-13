@@ -228,3 +228,32 @@ docker exec us-congress-scraper-1 /usr/local/bin/usc-run votes
 # Ingest into PostgreSQL (legislators must go first)
 docker exec us-congress-ingester-1 sh -c "node /app/src/ingest-legislators.js && node /app/src/ingest-votes.js"
 ```
+
+## Deploying changes to Docusaurus site
+
+```bash
+# Should act as govql user
+sudo -u govql -i
+```
+
+To get the changes for the site:
+
+```bash
+# Make sure we're in the right place
+cd /opt/govql/us-congress/docs
+# Make sure we're on the main branch
+git checkout main
+# Pull the latest changes
+git pull
+```
+
+To deploy changes to the Docusaurus site, simply run the build command and restart the stack:
+
+```bash
+cd /opt/govql/us-congress/docs
+npm run build
+cd /opt/govql/us-congress
+# We don't need to rebuild the Docker compose stack, just restart nginx
+# We don't even need dotenvx since nginx doesn't need environment variables
+docker compose restart nginx
+```
