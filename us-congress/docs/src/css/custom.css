@@ -17,6 +17,7 @@
   --ifm-color-primary-lightest: #0d407e;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  --doc-sidebar-width: 180px;
 }
 
 :root .navbar {
