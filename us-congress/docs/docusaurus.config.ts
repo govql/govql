@@ -124,19 +124,20 @@ const config: Config = {
           ],
         },
         {
+          title: 'Live Examples',
+          items: [
+            {
+              label: 'Nomination Votes',
+              to: '/docs/live-examples/nomination-votes',
+            },
+          ],
+        },
+        {
           title: 'API Reference',
           items: [
             {
               label: 'Schema Overview',
               to: '/docs/schema',
-            },
-            {
-              label: 'Legislators',
-              to: '/docs/schema/tables/legislators',
-            },
-            {
-              label: 'Votes',
-              to: '/docs/schema/tables/votes',
             },
           ],
         },
