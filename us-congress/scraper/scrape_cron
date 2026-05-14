@@ -1,2 +1,2 @@
-35 * * * * cd /congress && /usr/local/bin/usc-run votes --force >> /var/log/cron.log 2>&1
-0  2 * * * /usr/local/bin/update-legislators.sh >> /var/log/cron.log 2>&1
+35 * * * * root cd /congress && /usr/local/bin/usc-run votes --force >> /var/log/cron.log 2>&1
+0  2 * * * root /usr/local/bin/update-legislators.sh >> /var/log/cron.log 2>&1
