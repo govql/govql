@@ -211,7 +211,19 @@ async function replacePositions(client, voteId, chamber, votes) {
 
   const skipped = memberIds.length - rowCount;
   if (skipped > 0) {
-    logger.warn(`${voteId}: ${skipped} position(s) skipped (member_id not in legislators table)`);
+    const { rows } = await client.query(
+      isSenate
+        ? `SELECT v.member_id FROM unnest($1::text[]) AS v(member_id)
+           WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.lis_id = v.member_id)`
+        : `SELECT v.member_id FROM unnest($1::text[]) AS v(member_id)
+           WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.bioguide_id = v.member_id)`,
+      [memberIds],
+    );
+    const unknownIds = rows.map(r => r.member_id);
+    logger.warn(
+      `${voteId}: ${skipped} position(s) skipped — unknown ` +
+      `${isSenate ? 'lis_id' : 'bioguide_id'}: ${unknownIds.join(', ')}`,
+    );
   }
 }
 
@@ -247,7 +259,13 @@ async function processVoteFile(client, filePath) {
     return 'ingested';
   } catch (err) {
     await client.query('ROLLBACK');
-    logger.error(`Failed to ingest vote ${vote_id}: ${err.message}`);
+    const detail = [
+      err.message,
+      err.detail     && `detail: ${err.detail}`,
+      err.column     && `column: ${err.column}`,
+      err.constraint && `constraint: ${err.constraint}`,
+    ].filter(Boolean).join(' | ');
+    logger.error(`Failed to ingest vote ${vote_id}: ${detail}`);
     return 'failed';
   }
 }
@@ -289,6 +307,10 @@ async function run() {
       `Votes ingestion complete — ingested: ${totalIngested}, ` +
       `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
     );
+
+    if (process.env.HEALTHCHECK_VOTES_INGEST_URL) {
+      await fetch(process.env.HEALTHCHECK_VOTES_INGEST_URL).catch(() => {});
+    }
   } catch (err) {
     logger.error(`Votes ingestion failed: ${err.message}`);
     if (runId) {

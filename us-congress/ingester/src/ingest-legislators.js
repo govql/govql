@@ -204,6 +204,10 @@ async function run() {
     logger.info(
       `Legislators ingestion complete — upserted: ${totalUpserted}, failed: ${totalFailed}`,
     );
+
+    if (process.env.HEALTHCHECK_LEGISLATORS_INGEST_URL) {
+      await fetch(process.env.HEALTHCHECK_LEGISLATORS_INGEST_URL).catch(() => {});
+    }
   } catch (err) {
     logger.error(`Legislators ingestion failed: ${err.message}`);
     if (runId) {
