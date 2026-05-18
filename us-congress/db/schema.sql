@@ -188,7 +188,7 @@ CREATE TABLE vote_positions (
   -- Position as recorded; values differ slightly between chambers
   position        TEXT        NOT NULL,        -- 'Yea','Nay','Not Voting','Present','VP' (VP tie-break)
   -- Party/state at time of vote (denormalised for query convenience)
-  party           CHAR(1),                     -- 'D','R','I', etc.
+  party           TEXT,                        -- 'D','R','I','ID' (Independent Democrat), etc.
   state           CHAR(2),
 
   UNIQUE (vote_id, bioguide_id)
@@ -196,7 +196,7 @@ CREATE TABLE vote_positions (
 
 COMMENT ON TABLE vote_positions IS 'The individual yea/nay/abstain position of each legislator on each roll call vote. Highest-volume table.';
 COMMENT ON COLUMN vote_positions.position IS 'Values: Yea, Nay, Not Voting, Present, VP (vice presidential tie-breaker).';
-COMMENT ON COLUMN vote_positions.party IS 'Party at time of vote (snapshotted from upstream data to avoid joins for common analytics).';
+COMMENT ON COLUMN vote_positions.party IS 'Party at time of vote (snapshotted from upstream data to avoid joins for common analytics). Usually single-char (D, R, I) but can be multi-char (e.g. ID = Independent Democrat).';
 
 -- These indexes are critical for performance at query time
 CREATE INDEX idx_positions_vote_id ON vote_positions (vote_id);

@@ -9,7 +9,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 96M
+          memory: 256M
 
   postgres:
     image: postgres:18-alpine
