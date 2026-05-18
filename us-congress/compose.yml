@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: ./scraper/Dockerfile
     restart: always
+    environment:
+      - HEALTHCHECK_VOTES_SCRAPE_URL
     volumes:
       - scraped-data:/congress
     deploy:
@@ -73,6 +75,8 @@ services:
     restart: always
     environment:
       - DATABASE_URL
+      - HEALTHCHECK_VOTES_INGEST_URL
+      - HEALTHCHECK_LEGISLATORS_INGEST_URL
       # Cap the V8 heap — the ingester is mostly idle so 64 MB is ample.
       - NODE_OPTIONS=--max-old-space-size=64
     volumes:

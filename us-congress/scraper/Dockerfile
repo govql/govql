@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libxslt1-dev \
     libz-dev \
     wget \
+    curl \
     cron \
  && rm -rf /var/lib/apt/lists/*
 
@@ -40,4 +41,5 @@ RUN chmod 0644 /etc/cron.d/scrape_cron
 RUN mkdir -p /congress
 WORKDIR /congress
 
-CMD ["cron", "-f"]
+# Save container env vars so cron jobs can source them (cron doesn't inherit env).
+CMD ["/bin/sh", "-c", "printenv > /etc/environment && cron -f"]
