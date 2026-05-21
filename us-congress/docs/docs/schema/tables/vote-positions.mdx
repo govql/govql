@@ -25,7 +25,7 @@ The individual yea/nay/abstain position of each legislator on each roll call vot
 | `voteId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
 | `bioguideId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
 | `position` | `String` | The recorded vote position. Values: Yea, Nay, Not Voting, Present, VP (vice presidential tie-breaker). <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
-| `party` | `String` | Party at time of vote (snapshotted from upstream data to avoid joins for common analytics). |
+| `party` | `String` | Party at time of vote (snapshotted from upstream data to avoid joins for common analytics). Usually single-char (D, R, I) but can be multi-char (e.g. ID = Independent Democrat). |
 | `state` | `String` |  |
 
 ## Relationships

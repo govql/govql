@@ -108,6 +108,7 @@ services:
 
   server:
     build: ./postgraphile-server
+    restart: always
     # Port 4000 is intentionally not exposed to the host — nginx proxies to it internally.
     environment:
       - DATABASE_URL
@@ -116,7 +117,7 @@ services:
       - LOG_LEVEL
       # Cap the V8 heap. PostGraphile v5 is lean; 128 MB handles normal load
       # and the complexity budget prevents runaway query allocations.
-      - NODE_OPTIONS=--max-old-space-size=128
+      - NODE_OPTIONS=--max-old-space-size=192
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,7 +126,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 180M
+          memory: 224M
 
 volumes:
   scraped-data:

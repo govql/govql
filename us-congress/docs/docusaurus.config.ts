@@ -130,6 +130,10 @@ const config: Config = {
               label: 'Nomination Votes',
               to: '/docs/live-examples/nomination-votes',
             },
+            {
+              label: 'Voting Similarity Network',
+              to: '/docs/live-examples/voting-similarity',
+            },
           ],
         },
         {
