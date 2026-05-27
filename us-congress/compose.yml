@@ -40,6 +40,7 @@ services:
       - POSTGRES_USER
       - POSTGRES_PASSWORD
       - POSTGRES_DB
+      - GRAFANA_READER_PASSWORD
     volumes:
       - postgres-data:/var/lib/postgresql
       - ./db:/docker-entrypoint-initdb.d
@@ -127,6 +128,24 @@ services:
       resources:
         limits:
           memory: 224M
+
+  pdc-agent:
+    image: grafana/pdc-agent:latest
+    restart: always
+    command:
+      - -token
+      - ${GCLOUD_PDC_SIGNING_TOKEN}
+      - -cluster
+      - ${GCLOUD_PDC_CLUSTER}
+      - -gcloud-hosted-grafana-id
+      - ${GCLOUD_HOSTED_GRAFANA_ID}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 32M
 
 volumes:
   scraped-data:
