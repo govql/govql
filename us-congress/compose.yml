@@ -129,6 +129,21 @@ services:
         limits:
           memory: 224M
 
+  vector:
+    image: timberio/vector:latest-alpine
+    restart: always
+    volumes:
+      - ./vector/vector.toml:/etc/vector/vector.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - LOKI_ENDPOINT
+      - LOKI_USERNAME
+      - LOKI_API_KEY
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+
   pdc-agent:
     image: grafana/pdc-agent:latest
     restart: always
