@@ -1,0 +1,23 @@
+# Changelog
+
+All notable changes to `govql-mcp-server` are documented in this file.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [0.1.0] — 2026-05-28
+
+Initial release.
+
+### Added
+
+- `execute_graphql` tool — passthrough that runs any GraphQL query against
+  the GovQL endpoint and returns the result along with a `last_ingest`
+  freshness timestamp.
+- `introspect_schema` tool — returns the GovQL schema as standard GraphQL
+  introspection JSON, for agents to orient themselves at session start.
+- stdio transport (works with Claude Desktop, Claude Code, Cursor, and any
+  other MCP-compatible client that supports stdio servers).
+- Configuration via `GOVQL_ENDPOINT`, `GOVQL_TIMEOUT_MS`, and `LOG_LEVEL`
+  environment variables (all optional — defaults point at the public API).
+- Full test suite (17 tests) using FastMCP's in-memory client, including a
+  guardrail test that fails if any module writes to stdout.

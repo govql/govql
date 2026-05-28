@@ -100,6 +100,12 @@ const config: Config = {
           label: 'API Reference',
         },
         {
+          type: 'docSidebar',
+          sidebarId: 'mcpServerSidebar',
+          position: 'left',
+          label: 'MCP Server',
+        },
+        {
           to: '/issues',
           label: 'Issues',
           position: 'right',
