@@ -68,6 +68,21 @@ const config: Config = {
     ],
   ],
 
+  plugins: [
+    function buyMeACoffeePlugin() {
+      return {
+        name: 'buymeacoffee',
+        injectHtmlTags() {
+          return {
+            postBodyTags: [
+              `<script data-name="BMC-Widget" data-cfasync="false" src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js" data-id="govql" data-description="Support me on Buy me a coffee!" data-message="Help cover our cloud hosting costs!" data-color="#5f9fef" data-position="Right" data-x_margin="18" data-y_margin="18"></script>`,
+            ],
+          };
+        },
+      };
+    },
+  ],
+
   themeConfig: {
     // Replace with your project's social card
     image: 'img/govql-social-card.jpg',
@@ -149,12 +164,12 @@ const config: Config = {
           title: 'Code',
           items: [
             {
-              label: 'Issues',
-              href: '/issues',
-            },
-            {
               label: 'GitHub',
               href: 'https://github.com/govql',
+            },
+            {
+              label: 'Issues',
+              href: '/issues',
             },
           ],
         },
