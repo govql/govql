@@ -1,0 +1,47 @@
+[project]
+name = "govql-mcp-server"
+version = "0.1.0"
+description = "MCP server for GovQL — query US Congressional data via GraphQL from any MCP client."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "GovQL" }]
+keywords = ["mcp", "model-context-protocol", "graphql", "government", "congress", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "fastmcp>=3.3.0",
+    "httpx>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://govql.us"
+Repository = "https://github.com/govql/govql"
+Issues = "https://github.com/govql/govql/issues"
+
+[project.scripts]
+govql-mcp-server = "govql_mcp_server.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/govql_mcp_server"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

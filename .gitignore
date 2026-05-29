@@ -2,3 +2,13 @@ node_modules
 build
 .env.keys
 .DS_Store
+
+# Python (mcp-server/)
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+dist/
+
+# MCP client config — typically contains local paths and is per-user
+.mcp.json
