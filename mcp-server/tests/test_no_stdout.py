@@ -21,7 +21,9 @@ _PACKAGE_MODULES = [
     "govql_mcp_server.server",
     "govql_mcp_server.tools",
     "govql_mcp_server.tools.passthrough",
-    "govql_mcp_server.tools.introspection",
+    "govql_mcp_server.tools._discovery_shared",
+    "govql_mcp_server.tools.list_types",
+    "govql_mcp_server.tools.describe_type",
 ]
 
 

@@ -68,11 +68,10 @@ async def execute_graphql(
     underlying data was last refreshed — votes refresh hourly, legislators
     daily), and `http_status`.
 
-    Schema discovery: `introspect_schema` returns the full GraphQL schema,
-    but the payload is very large (~250k characters as of v0.1) and may
-    exceed the client's tool-result size limit. If that happens, write the
-    schema to a file and grep/jq for the types you need; future versions of
-    this server will provide narrower discovery tools.
+    Schema discovery: call `list_types()` (optionally with
+    `kind="OBJECT"`) to see what's queryable, then `describe_type(name)`
+    for any type you want to use. Each call returns a small, focused
+    payload so you can build up just the picture of the schema you need.
 
     Examples:
 

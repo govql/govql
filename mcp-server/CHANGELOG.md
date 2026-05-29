@@ -13,11 +13,13 @@ Initial release.
 - `execute_graphql` tool — passthrough that runs any GraphQL query against
   the GovQL endpoint and returns the result along with a `last_ingest`
   freshness timestamp.
-- `introspect_schema` tool — returns the GovQL schema as standard GraphQL
-  introspection JSON, for agents to orient themselves at session start.
+- `list_types` tool — returns the names and kinds of every type in the
+  GovQL schema, with an optional case-insensitive `kind` filter.
+- `describe_type` tool — returns one GraphQL type's full description
+  (fields, arg signatures, input fields, enum values) by name.
 - stdio transport (works with Claude Desktop, Claude Code, Cursor, and any
   other MCP-compatible client that supports stdio servers).
 - Configuration via `GOVQL_ENDPOINT`, `GOVQL_TIMEOUT_MS`, and `LOG_LEVEL`
   environment variables (all optional — defaults point at the public API).
-- Full test suite (17 tests) using FastMCP's in-memory client, including a
+- Full test suite (23 tests) using FastMCP's in-memory client, including a
   guardrail test that fails if any module writes to stdout.

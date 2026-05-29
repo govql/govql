@@ -40,8 +40,7 @@ Edit `claude_desktop_config.json` (Settings → Developer → Edit Config):
 }
 ```
 
-Restart Claude Desktop. The `govql` tools (`execute_graphql` and
-`introspect_schema`) appear in the tools panel.
+Restart Claude Desktop. The `govql` tools appear in the tools panel.
 
 ### Claude Code
 
@@ -72,7 +71,8 @@ is `uvx govql-mcp-server` with no required arguments.
 | Tool | Purpose |
 |---|---|
 | `execute_graphql` | Run any GraphQL query against the GovQL endpoint. Returns the result plus an `last_ingest` timestamp so the agent can reason about data freshness. |
-| `introspect_schema` | Returns the full GovQL schema as standard introspection JSON. Call once per session to learn what's queryable. |
+| `list_types` | Returns the names and kinds of every type in the GovQL schema. Optional `kind` filter (`"OBJECT"`, `"INPUT_OBJECT"`, `"ENUM"`, etc.) to narrow further. Start here when you don't know what's queryable. |
+| `describe_type` | Returns one type's full details — fields, arg signatures, input fields, enum values. Call after `list_types` to learn the shape of a specific type before writing a query. |
 
 ## Configuration
 
@@ -101,8 +101,9 @@ Vote data refreshes hourly; legislator data refreshes daily.
 
 ## Status
 
-Version 0.1.0 ships the two foundational tools above (passthrough +
-introspection). Curated higher-level tools (`find_legislator`,
+Version 0.1.0 ships three foundational tools: a GraphQL passthrough
+(`execute_graphql`) and two narrow schema-discovery tools (`list_types`,
+`describe_type`). Curated higher-level tools (`find_legislator`,
 `get_voting_record`, `compare_voters`, etc.) are planned for subsequent
 releases — see
 [design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md)

@@ -80,8 +80,9 @@ Once installed, try a question like:
 
 > *"How did Vermont's two senators vote on the most recent nomination?"*
 
-The agent will call `introspect_schema` to learn the schema, then write and
-run a GraphQL query against `votes` + `votePositions`, then summarize.
+The agent will use `list_types` and `describe_type` to learn the schema as
+needed, then write and run a GraphQL query against `votes` + `votePositions`
+via `execute_graphql`, then summarize.
 
 Or for something with more analysis:
 
@@ -95,7 +96,8 @@ The agent figures out the joins and aggregations.
 | Tool | Purpose |
 |---|---|
 | `execute_graphql` | Run any GraphQL query and get the result back. Includes a `last_ingest` timestamp so the agent can reason about data freshness. |
-| `introspect_schema` | Returns the full GovQL schema as standard introspection JSON. |
+| `list_types` | Returns the names and kinds of every type in the schema. Optional `kind` filter (e.g. `"OBJECT"`) to narrow further. |
+| `describe_type` | Returns one type's full details — fields, arg signatures, input fields, enum values — by name. |
 
 ## Limitations
 

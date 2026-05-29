@@ -101,7 +101,7 @@ Edit Config) and add an entry pointing at this checkout:
 ```
 
 Restart Claude Desktop. Confirm `govql-local` shows up in the tools panel
-with both `execute_graphql` and `introspect_schema` listed.
+with `execute_graphql`, `list_types`, and `describe_type` listed.
 
 ### The test prompt
 
@@ -111,8 +111,8 @@ Ask:
 
 Expected behavior:
 
-1. The agent calls `introspect_schema` (or already knows the schema from a
-   prior session).
+1. The agent calls `list_types` / `describe_type` as needed (or already
+   knows the schema from a prior session).
 2. It writes a query against `allVotes` + `votePositions` filtering for
    Vermont senators and the latest nomination.
 3. It returns a concise answer naming both senators and their positions.

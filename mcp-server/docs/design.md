@@ -30,7 +30,8 @@ There are two shapes an MCP server like this could take:
   `get_voting_record`, `compare_voters`. Easier for agents to call
   correctly; more code to maintain; only as up-to-date as the maintainer.
 
-v0.1 ships *only* the thin layer (`execute_graphql` + `introspect_schema`).
+v0.1 ships *only* the thin layer: `execute_graphql` plus two narrow
+schema-discovery tools (`list_types` and `describe_type`).
 The roadmap below adds curated tools incrementally — but the passthrough
 stays as the escape hatch. The rule for adding a curated tool is: it should
 embody a query pattern that's either non-obvious from the schema, expensive
