@@ -1,0 +1,38 @@
+# =============================================================================
+# Vector — Docker Compose log collector → Grafana Cloud Loki
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Source: all container logs via the Docker socket
+# ---------------------------------------------------------------------------
+[sources.docker]
+type = "docker_logs"
+
+# ---------------------------------------------------------------------------
+# Transform: drop Vector's own logs to avoid an infinite loop
+# ---------------------------------------------------------------------------
+[transforms.filter_internal]
+type      = "filter"
+inputs    = ["docker"]
+condition = '.label."com.docker.compose.service" != "vector"'
+
+# ---------------------------------------------------------------------------
+# Sink: Grafana Cloud Loki
+# Labels kept intentionally low-cardinality: service name and stdout/stderr.
+# ---------------------------------------------------------------------------
+[sinks.loki]
+type     = "loki"
+inputs   = ["filter_internal"]
+endpoint = "${LOKI_ENDPOINT}"
+
+[sinks.loki.labels]
+service = '{{ label."com.docker.compose.service" }}'
+stream  = "{{ stream }}"
+
+[sinks.loki.auth]
+strategy = "basic"
+user     = "${LOKI_USERNAME}"
+password = "${LOKI_API_KEY}"
+
+[sinks.loki.encoding]
+codec = "text"
