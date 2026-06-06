@@ -308,6 +308,27 @@ async function run() {
       `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
     );
 
+    // Refresh the current-congress voting-similarity matrix only when new votes
+    // actually landed (most hourly runs ingest nothing). CONCURRENTLY keeps the
+    // view readable during the refresh. The run is already committed and marked
+    // 'success' above, so a refresh failure is logged but not fatal — the matrix
+    // simply stays at its previous contents until the next successful refresh.
+    if (totalIngested > 0) {
+      try {
+        const t0 = Date.now();
+        await client.query(
+          'REFRESH MATERIALIZED VIEW CONCURRENTLY vote_similarity_current',
+        );
+        logger.info(
+          `Refreshed vote_similarity_current in ${Date.now() - t0} ms`,
+        );
+      } catch (err) {
+        logger.error(
+          `vote_similarity_current refresh failed (data is ingested; matrix is stale): ${err.message}`,
+        );
+      }
+    }
+
     if (process.env.HEALTHCHECK_VOTES_INGEST_URL) {
       await fetch(process.env.HEALTHCHECK_VOTES_INGEST_URL).catch(() => {});
     }

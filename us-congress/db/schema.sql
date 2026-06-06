@@ -247,6 +247,38 @@ CREATE VIEW member_voting_summary AS
 COMMENT ON VIEW member_voting_summary IS E'A member''s voting record summarised by congress, vote category, and position, with counts. Filter by bioguideId (optionally congress/category).';
 
 -- ---------------------------------------------------------------------------
+-- VOTING SIMILARITY (current congress only) — MATERIALIZED
+-- Pairwise agreement between members: for every pair, how many votes they both
+-- cast a Yea/Nay on (shared_votes) and how many they voted the same way (agreed).
+-- This is an O(n²)-within-each-vote self-join — too expensive to compute per
+-- request — so it is materialized and refreshed after vote ingestion (see the
+-- REFRESH hook in ingester/src/ingest-votes.js run()). Scoped to the current
+-- congress to keep the refresh tractable; historical congresses are computed
+-- client-side by the docs site's similarity demo.
+--
+-- The agreement ratio (agreed / shared_votes) and any minimum-shared-votes
+-- threshold are applied by the consumer; this view stays a raw count table.
+-- ---------------------------------------------------------------------------
+CREATE MATERIALIZED VIEW vote_similarity_current AS
+  SELECT a.bioguide_id AS member_a, b.bioguide_id AS member_b,
+         v.chamber,
+         count(*)::int                                        AS shared_votes,
+         count(*) FILTER (WHERE a.position = b.position)::int AS agreed
+  FROM vote_positions a
+  JOIN vote_positions b
+    ON b.vote_id = a.vote_id AND a.bioguide_id < b.bioguide_id
+  JOIN votes v ON v.vote_id = a.vote_id
+  WHERE a.position IN ('Yea', 'Nay') AND b.position IN ('Yea', 'Nay')
+    AND v.congress = (SELECT max(congress) FROM votes)
+  GROUP BY a.bioguide_id, b.bioguide_id, v.chamber;
+
+-- Unique index is required for REFRESH MATERIALIZED VIEW CONCURRENTLY.
+CREATE UNIQUE INDEX idx_vote_similarity_current_pair
+  ON vote_similarity_current (member_a, member_b, chamber);
+
+COMMENT ON MATERIALIZED VIEW vote_similarity_current IS E'Pairwise voting agreement for the current congress: one row per (member_a, member_b, chamber) with shared_votes (both cast Yea/Nay) and agreed (voted the same). Refreshed after vote ingestion. Compute agreement as agreed::float / shared_votes.';
+
+-- ---------------------------------------------------------------------------
 -- BILL COSPONSORS
 -- ---------------------------------------------------------------------------
 CREATE TABLE bill_cosponsors (
