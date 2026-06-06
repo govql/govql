@@ -247,36 +247,45 @@ CREATE VIEW member_voting_summary AS
 COMMENT ON VIEW member_voting_summary IS E'A member''s voting record summarised by congress, vote category, and position, with counts. Filter by bioguideId (optionally congress/category).';
 
 -- ---------------------------------------------------------------------------
--- VOTING SIMILARITY (current congress only) — MATERIALIZED
--- Pairwise agreement between members: for every pair, how many votes they both
--- cast a Yea/Nay on (shared_votes) and how many they voted the same way (agreed).
--- This is an O(n²)-within-each-vote self-join — too expensive to compute per
--- request — so it is materialized and refreshed after vote ingestion (see the
--- REFRESH hook in ingester/src/ingest-votes.js run()). Scoped to the current
--- congress to keep the refresh tractable; historical congresses are computed
--- client-side by the docs site's similarity demo.
+-- VOTING SIMILARITY (all congresses) — incrementally maintained table
+-- Pairwise agreement between members within a congress: for every pair, how many
+-- votes they both cast a Yea/Nay on (shared_votes) and how many they voted the
+-- same way (agreed). This is an O(n²)-within-each-vote self-join — too expensive
+-- to compute per request — so it is precomputed here.
+--
+-- Each congress's similarity is self-contained, and historical vote data is
+-- immutable, so only the current congress ever changes. The ingester rebuilds
+-- one congress's partition at a time (DELETE+INSERT in a transaction) for the
+-- congresses that received new votes — see ingest-votes.js run(). The first full
+-- ingest backfills every congress; steady-state runs only touch the current one.
 --
 -- The agreement ratio (agreed / shared_votes) and any minimum-shared-votes
--- threshold are applied by the consumer; this view stays a raw count table.
+-- threshold are applied by the consumer; this table stays a raw count table.
 -- ---------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW vote_similarity_current AS
-  SELECT a.bioguide_id AS member_a, b.bioguide_id AS member_b,
-         v.chamber,
-         count(*)::int                                        AS shared_votes,
-         count(*) FILTER (WHERE a.position = b.position)::int AS agreed
-  FROM vote_positions a
-  JOIN vote_positions b
-    ON b.vote_id = a.vote_id AND a.bioguide_id < b.bioguide_id
-  JOIN votes v ON v.vote_id = a.vote_id
-  WHERE a.position IN ('Yea', 'Nay') AND b.position IN ('Yea', 'Nay')
-    AND v.congress = (SELECT max(congress) FROM votes)
-  GROUP BY a.bioguide_id, b.bioguide_id, v.chamber;
+CREATE TABLE vote_similarity (
+  congress     SMALLINT NOT NULL,
+  chamber      CHAR(1)  NOT NULL,
+  member_a     TEXT     NOT NULL,        -- pair stored once, member_a < member_b
+  member_b     TEXT     NOT NULL,
+  shared_votes INT      NOT NULL,        -- votes where both cast Yea/Nay
+  agreed       INT      NOT NULL,        -- of those, votes where they matched
 
--- Unique index is required for REFRESH MATERIALIZED VIEW CONCURRENTLY.
-CREATE UNIQUE INDEX idx_vote_similarity_current_pair
-  ON vote_similarity_current (member_a, member_b, chamber);
+  PRIMARY KEY (congress, chamber, member_a, member_b)
+);
 
-COMMENT ON MATERIALIZED VIEW vote_similarity_current IS E'Pairwise voting agreement for the current congress: one row per (member_a, member_b, chamber) with shared_votes (both cast Yea/Nay) and agreed (voted the same). Refreshed after vote ingestion. Compute agreement as agreed::float / shared_votes.';
+COMMENT ON TABLE vote_similarity IS E'Pairwise voting agreement, per congress: one row per (congress, chamber, member_a, member_b) with shared_votes (both cast Yea/Nay) and agreed (voted the same). Pairs are stored once with member_a < member_b. Maintained by the vote ingester. Compute agreement as agreed::float / shared_votes.';
+
+-- Rebuild bookkeeping: the high-water mark of votes.updated_at that each
+-- congress's vote_similarity rows were last built from. The ingester rebuilds a
+-- congress whenever its max(votes.updated_at) exceeds built_through (or no row
+-- exists yet), and advances built_through only after a successful rebuild — so a
+-- failed or interrupted rebuild leaves the congress stale and is retried next run.
+CREATE TABLE vote_similarity_state (
+  congress      SMALLINT    PRIMARY KEY,
+  built_through TIMESTAMPTZ NOT NULL
+);
+
+COMMENT ON TABLE vote_similarity_state IS E'@omit\nRebuild bookkeeping for vote_similarity — internal, not exposed via GraphQL.';
 
 -- ---------------------------------------------------------------------------
 -- BILL COSPONSORS

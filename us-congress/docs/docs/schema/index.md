@@ -175,16 +175,20 @@ positions: 45 }`.
 `congress` and `category` are optional — omit them for a member's full record
 across all congresses and categories.
 
-**Voting similarity** — for the **current congress**, pairwise agreement between
-members is precomputed in `allVoteSimilarityCurrents`. Each row gives `sharedVotes`
+**Voting similarity** — pairwise agreement between members within a congress is
+precomputed in `allVoteSimilarities` (all congresses). Each row gives `sharedVotes`
 (votes where both members cast a Yea/Nay) and `agreed` (votes where they matched);
-compute the agreement ratio as `agreed / sharedVotes`. Find a member's closest
-allies:
+compute the agreement ratio as `agreed / sharedVotes`. Filter by `congress` (and
+usually `chamber`). Find a member's closest allies in a given congress:
 
 ```graphql
 {
-  allVoteSimilarityCurrents(
-    filter: { chamber: { equalTo: "s" }, memberA: { equalTo: "W000817" } }
+  allVoteSimilarities(
+    filter: {
+      congress: { equalTo: 119 }
+      chamber: { equalTo: "s" }
+      memberA: { equalTo: "W000817" }
+    }
     orderBy: AGREED_DESC
     first: 5
   ) {
