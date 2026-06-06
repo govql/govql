@@ -208,6 +208,45 @@ CREATE INDEX idx_positions_vote_party ON vote_positions (vote_id, party);
 CREATE INDEX idx_positions_bioguide_vote ON vote_positions (bioguide_id, vote_id);
 
 -- ---------------------------------------------------------------------------
+-- AGGREGATION VIEWS
+-- Curated server-side rollups over vote_positions. PostGraphile exposes each as
+-- a filterable connection (allVotePartyBreakdowns, etc.). They are deliberately
+-- narrow: callers filter by vote_id / bioguide_id (hitting existing indexes)
+-- rather than authoring arbitrary GROUP BYs over the whole table. Plain (not
+-- materialized) views — always current, computed on the (small, filtered) slice.
+-- ---------------------------------------------------------------------------
+
+-- Per-vote party × position counts, e.g. "how did each party split on this vote?"
+-- Filter by vote_id; served by idx_positions_vote_party (vote_id, party).
+CREATE VIEW vote_party_breakdown AS
+  SELECT vote_id, party, position, count(*)::int AS positions
+  FROM vote_positions
+  GROUP BY vote_id, party, position;
+
+COMMENT ON VIEW vote_party_breakdown IS E'Per-vote breakdown of how each party voted: one row per (vote, party, position) with a count. Filter by voteId.';
+
+-- Per-vote position totals (Yea/Nay/Present/Not Voting tallies for a vote).
+-- Filter by vote_id; served by idx_positions_vote_id.
+CREATE VIEW vote_totals AS
+  SELECT vote_id, position, count(*)::int AS positions
+  FROM vote_positions
+  GROUP BY vote_id, position;
+
+COMMENT ON VIEW vote_totals IS E'Per-vote position totals: one row per (vote, position) with a count across all members. Filter by voteId.';
+
+-- A legislator's voting record summarised by congress × vote category × position.
+-- Filter by bioguide_id (served by idx_positions_bioguide); joins votes for the
+-- congress/category dimensions, which live on the votes table.
+CREATE VIEW member_voting_summary AS
+  SELECT vp.bioguide_id, v.congress, v.category, vp.position,
+         count(*)::int AS positions
+  FROM vote_positions vp
+  JOIN votes v ON v.vote_id = vp.vote_id
+  GROUP BY vp.bioguide_id, v.congress, v.category, vp.position;
+
+COMMENT ON VIEW member_voting_summary IS E'A member''s voting record summarised by congress, vote category, and position, with counts. Filter by bioguideId (optionally congress/category).';
+
+-- ---------------------------------------------------------------------------
 -- BILL COSPONSORS
 -- ---------------------------------------------------------------------------
 CREATE TABLE bill_cosponsors (
