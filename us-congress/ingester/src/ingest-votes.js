@@ -278,21 +278,22 @@ async function processVoteFile(client, filePath) {
 // bumps it on every change, so any position change moves the parent vote's
 // updated_at. Cheap: votes is small and congress is indexed.
 //
-// Returns [{ congress, curMax }]. curMax is captured here, BEFORE the rebuild,
-// and written as the new watermark only on success — so a vote updated during
-// the rebuild leaves the congress stale (retried next run) rather than being
-// silently marked built.
+// Returns an array of congress numbers. The watermark itself is captured inside
+// rebuildSimilarityForCongress (from the same MVCC snapshot it builds from), not
+// here — so it keeps full microsecond precision rather than being truncated by a
+// round-trip through a JS Date (which only holds milliseconds, and made every
+// congress look perpetually stale).
 // ---------------------------------------------------------------------------
 async function staleCongresses(client) {
   const { rows } = await client.query(
-    `SELECT v.congress AS congress, max(v.updated_at) AS cur_max
+    `SELECT v.congress AS congress
      FROM votes v
      LEFT JOIN vote_similarity_state s ON s.congress = v.congress
      GROUP BY v.congress, s.built_through
      HAVING s.built_through IS NULL OR max(v.updated_at) > s.built_through
      ORDER BY v.congress`,
   );
-  return rows.map((r) => ({ congress: r.congress, curMax: r.cur_max }));
+  return rows.map((r) => r.congress);
 }
 
 // ---------------------------------------------------------------------------
@@ -304,11 +305,18 @@ async function staleCongresses(client) {
 // (never an empty slice), and so the watermark can only advance if the rebuild
 // committed. Scoped to one congress via a CTE prefilter so cost is independent
 // of how much historical data exists. Excludes Present / Not Voting / VP (only
-// Yea/Nay count toward agreement). `builtThrough` is the max(votes.updated_at)
-// captured before the rebuild (see staleCongresses).
+// Yea/Nay count toward agreement).
+//
+// The transaction runs at REPEATABLE READ so the similarity build and the
+// watermark capture (max(votes.updated_at), computed in SQL) read one consistent
+// snapshot: built_through reflects exactly the data that was built, and any vote
+// changed after that snapshot stays ahead of the watermark and is rebuilt next
+// run. Capturing the watermark in SQL (rather than passing a JS value in) keeps
+// its full microsecond precision — a JS Date truncates to milliseconds, which
+// made max(updated_at) > built_through perpetually true.
 // ---------------------------------------------------------------------------
-async function rebuildSimilarityForCongress(client, congress, builtThrough) {
-  await client.query('BEGIN');
+async function rebuildSimilarityForCongress(client, congress) {
+  await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
   try {
     await client.query('DELETE FROM vote_similarity WHERE congress = $1', [
       congress,
@@ -332,9 +340,9 @@ async function rebuildSimilarityForCongress(client, congress, builtThrough) {
     );
     await client.query(
       `INSERT INTO vote_similarity_state (congress, built_through)
-       VALUES ($1, $2)
+       SELECT $1, max(updated_at) FROM votes WHERE congress = $1
        ON CONFLICT (congress) DO UPDATE SET built_through = EXCLUDED.built_through`,
-      [congress, builtThrough],
+      [congress],
     );
     await client.query('COMMIT');
   } catch (err) {
@@ -391,10 +399,10 @@ async function run() {
     // is already committed and the run marked 'success'), and the congress simply
     // remains stale for the next run.
     const stale = await staleCongresses(client);
-    for (const { congress, curMax } of stale) {
+    for (const congress of stale) {
       try {
         const t0 = Date.now();
-        await rebuildSimilarityForCongress(client, congress, curMax);
+        await rebuildSimilarityForCongress(client, congress);
         logger.info(
           `Rebuilt vote_similarity for congress ${congress} in ${Date.now() - t0} ms`,
         );
