@@ -271,6 +271,79 @@ async function processVoteFile(client, filePath) {
 }
 
 // ---------------------------------------------------------------------------
+// Congresses whose vote_similarity rows are stale: their max(votes.updated_at)
+// is newer than the watermark from their last successful rebuild (or they have
+// never been built). votes.updated_at is a reliable signal — upsertVote runs in
+// the same transaction as replacePositions and the trg_votes_updated_at trigger
+// bumps it on every change, so any position change moves the parent vote's
+// updated_at. Cheap: votes is small and congress is indexed.
+//
+// Returns [{ congress, curMax }]. curMax is captured here, BEFORE the rebuild,
+// and written as the new watermark only on success — so a vote updated during
+// the rebuild leaves the congress stale (retried next run) rather than being
+// silently marked built.
+// ---------------------------------------------------------------------------
+async function staleCongresses(client) {
+  const { rows } = await client.query(
+    `SELECT v.congress AS congress, max(v.updated_at) AS cur_max
+     FROM votes v
+     LEFT JOIN vote_similarity_state s ON s.congress = v.congress
+     GROUP BY v.congress, s.built_through
+     HAVING s.built_through IS NULL OR max(v.updated_at) > s.built_through
+     ORDER BY v.congress`,
+  );
+  return rows.map((r) => ({ congress: r.congress, curMax: r.cur_max }));
+}
+
+// ---------------------------------------------------------------------------
+// Rebuild the voting-similarity rows for a single congress, and advance its
+// watermark — all in one transaction.
+//
+// DELETE + INSERT (+ watermark UPSERT) inside one transaction so concurrent
+// readers see the old partition until the new one is committed atomically
+// (never an empty slice), and so the watermark can only advance if the rebuild
+// committed. Scoped to one congress via a CTE prefilter so cost is independent
+// of how much historical data exists. Excludes Present / Not Voting / VP (only
+// Yea/Nay count toward agreement). `builtThrough` is the max(votes.updated_at)
+// captured before the rebuild (see staleCongresses).
+// ---------------------------------------------------------------------------
+async function rebuildSimilarityForCongress(client, congress, builtThrough) {
+  await client.query('BEGIN');
+  try {
+    await client.query('DELETE FROM vote_similarity WHERE congress = $1', [
+      congress,
+    ]);
+    await client.query(
+      `INSERT INTO vote_similarity
+         (congress, chamber, member_a, member_b, shared_votes, agreed)
+       WITH cpos AS (
+         SELECT vp.vote_id, vp.bioguide_id, vp.position, v.congress, v.chamber
+         FROM vote_positions vp
+         JOIN votes v ON v.vote_id = vp.vote_id
+         WHERE v.congress = $1 AND vp.position IN ('Yea', 'Nay')
+       )
+       SELECT a.congress, a.chamber, a.bioguide_id, b.bioguide_id,
+              count(*)::int,
+              count(*) FILTER (WHERE a.position = b.position)::int
+       FROM cpos a
+       JOIN cpos b ON b.vote_id = a.vote_id AND a.bioguide_id < b.bioguide_id
+       GROUP BY a.congress, a.chamber, a.bioguide_id, b.bioguide_id`,
+      [congress],
+    );
+    await client.query(
+      `INSERT INTO vote_similarity_state (congress, built_through)
+       VALUES ($1, $2)
+       ON CONFLICT (congress) DO UPDATE SET built_through = EXCLUDED.built_through`,
+      [congress, builtThrough],
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function run() {
@@ -307,6 +380,31 @@ async function run() {
       `Votes ingestion complete — ingested: ${totalIngested}, ` +
       `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
     );
+
+    // Rebuild vote_similarity for every congress whose vote data has changed
+    // since its last successful rebuild (see staleCongresses). This is driven by
+    // actual staleness, not by what was ingested this run, so a rebuild that
+    // failed or was interrupted on a previous run is retried automatically — its
+    // watermark was never advanced. On a fresh DB every congress is stale (full
+    // backfill); steady state, only the current congress is stale. Each rebuild
+    // is its own transaction: failures are logged but non-fatal (the ingestion
+    // is already committed and the run marked 'success'), and the congress simply
+    // remains stale for the next run.
+    const stale = await staleCongresses(client);
+    for (const { congress, curMax } of stale) {
+      try {
+        const t0 = Date.now();
+        await rebuildSimilarityForCongress(client, congress, curMax);
+        logger.info(
+          `Rebuilt vote_similarity for congress ${congress} in ${Date.now() - t0} ms`,
+        );
+      } catch (err) {
+        logger.error(
+          `vote_similarity rebuild for congress ${congress} failed ` +
+          `(votes are ingested; similarity is stale, will retry next run): ${err.message}`,
+        );
+      }
+    }
 
     if (process.env.HEALTHCHECK_VOTES_INGEST_URL) {
       await fetch(process.env.HEALTHCHECK_VOTES_INGEST_URL).catch(() => {});

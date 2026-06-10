@@ -126,6 +126,80 @@ Reverse relationships (one-to-many) return a connection with `nodes`:
 }
 ```
 
+### Aggregation
+
+Some common counts are exposed as **aggregation views** — the database does the
+grouping, so you don't have to fetch every position row and tally it client-side.
+Each is a filterable connection like any other type. Filter them to the slice you
+care about (a vote, a member) rather than scanning everything.
+
+**Party breakdown of a vote** — how each party split, in one round-trip:
+
+```graphql
+{
+  allVotePartyBreakdowns(filter: { voteId: { equalTo: "s83-119.2025" } }) {
+    nodes { party position positions }
+  }
+}
+```
+
+Returns one row per (party, position), e.g. `{ party: "D", position: "Yea",
+positions: 45 }`.
+
+**Position totals for a vote** — the overall Yea/Nay/Present/Not Voting tally:
+
+```graphql
+{
+  allVoteTotals(filter: { voteId: { equalTo: "s83-119.2025" } }) {
+    nodes { position positions }
+  }
+}
+```
+
+**A member's voting record**, summarised by congress and vote category:
+
+```graphql
+{
+  allMemberVotingSummaries(
+    filter: {
+      bioguideId: { equalTo: "W000817" }
+      congress: { equalTo: 119 }
+      category: { equalTo: "cloture" }
+    }
+  ) {
+    nodes { position positions }
+  }
+}
+```
+
+`congress` and `category` are optional — omit them for a member's full record
+across all congresses and categories.
+
+**Voting similarity** — pairwise agreement between members within a congress is
+precomputed in `allVoteSimilarities` (all congresses). Each row gives `sharedVotes`
+(votes where both members cast a Yea/Nay) and `agreed` (votes where they matched);
+compute the agreement ratio as `agreed / sharedVotes`. Filter by `congress` (and
+usually `chamber`). Find a member's closest allies in a given congress:
+
+```graphql
+{
+  allVoteSimilarities(
+    filter: {
+      congress: { equalTo: 119 }
+      chamber: { equalTo: "s" }
+      memberA: { equalTo: "W000817" }
+    }
+    orderBy: AGREED_DESC
+    first: 5
+  ) {
+    nodes { memberB sharedVotes agreed }
+  }
+}
+```
+
+Pairs are stored once with `memberA < memberB`, so to find all of one member's
+pairings you may need to match on `memberA` **or** `memberB`.
+
 ---
 
 :::note

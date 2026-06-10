@@ -208,6 +208,86 @@ CREATE INDEX idx_positions_vote_party ON vote_positions (vote_id, party);
 CREATE INDEX idx_positions_bioguide_vote ON vote_positions (bioguide_id, vote_id);
 
 -- ---------------------------------------------------------------------------
+-- AGGREGATION VIEWS
+-- Curated server-side rollups over vote_positions. PostGraphile exposes each as
+-- a filterable connection (allVotePartyBreakdowns, etc.). They are deliberately
+-- narrow: callers filter by vote_id / bioguide_id (hitting existing indexes)
+-- rather than authoring arbitrary GROUP BYs over the whole table. Plain (not
+-- materialized) views — always current, computed on the (small, filtered) slice.
+-- ---------------------------------------------------------------------------
+
+-- Per-vote party × position counts, e.g. "how did each party split on this vote?"
+-- Filter by vote_id; served by idx_positions_vote_party (vote_id, party).
+CREATE VIEW vote_party_breakdown AS
+  SELECT vote_id, party, position, count(*)::int AS positions
+  FROM vote_positions
+  GROUP BY vote_id, party, position;
+
+COMMENT ON VIEW vote_party_breakdown IS E'Per-vote breakdown of how each party voted: one row per (vote, party, position) with a count. Filter by voteId.';
+
+-- Per-vote position totals (Yea/Nay/Present/Not Voting tallies for a vote).
+-- Filter by vote_id; served by idx_positions_vote_id.
+CREATE VIEW vote_totals AS
+  SELECT vote_id, position, count(*)::int AS positions
+  FROM vote_positions
+  GROUP BY vote_id, position;
+
+COMMENT ON VIEW vote_totals IS E'Per-vote position totals: one row per (vote, position) with a count across all members. Filter by voteId.';
+
+-- A legislator's voting record summarised by congress × vote category × position.
+-- Filter by bioguide_id (served by idx_positions_bioguide); joins votes for the
+-- congress/category dimensions, which live on the votes table.
+CREATE VIEW member_voting_summary AS
+  SELECT vp.bioguide_id, v.congress, v.category, vp.position,
+         count(*)::int AS positions
+  FROM vote_positions vp
+  JOIN votes v ON v.vote_id = vp.vote_id
+  GROUP BY vp.bioguide_id, v.congress, v.category, vp.position;
+
+COMMENT ON VIEW member_voting_summary IS E'A member''s voting record summarised by congress, vote category, and position, with counts. Filter by bioguideId (optionally congress/category).';
+
+-- ---------------------------------------------------------------------------
+-- VOTING SIMILARITY (all congresses) — incrementally maintained table
+-- Pairwise agreement between members within a congress: for every pair, how many
+-- votes they both cast a Yea/Nay on (shared_votes) and how many they voted the
+-- same way (agreed). This is an O(n²)-within-each-vote self-join — too expensive
+-- to compute per request — so it is precomputed here.
+--
+-- Each congress's similarity is self-contained, and historical vote data is
+-- immutable, so only the current congress ever changes. The ingester rebuilds
+-- one congress's partition at a time (DELETE+INSERT in a transaction) for the
+-- congresses that received new votes — see ingest-votes.js run(). The first full
+-- ingest backfills every congress; steady-state runs only touch the current one.
+--
+-- The agreement ratio (agreed / shared_votes) and any minimum-shared-votes
+-- threshold are applied by the consumer; this table stays a raw count table.
+-- ---------------------------------------------------------------------------
+CREATE TABLE vote_similarity (
+  congress     SMALLINT NOT NULL,
+  chamber      CHAR(1)  NOT NULL,
+  member_a     TEXT     NOT NULL,        -- pair stored once, member_a < member_b
+  member_b     TEXT     NOT NULL,
+  shared_votes INT      NOT NULL,        -- votes where both cast Yea/Nay
+  agreed       INT      NOT NULL,        -- of those, votes where they matched
+
+  PRIMARY KEY (congress, chamber, member_a, member_b)
+);
+
+COMMENT ON TABLE vote_similarity IS E'Pairwise voting agreement, per congress: one row per (congress, chamber, member_a, member_b) with shared_votes (both cast Yea/Nay) and agreed (voted the same). Pairs are stored once with member_a < member_b. Maintained by the vote ingester. Compute agreement as agreed::float / shared_votes.';
+
+-- Rebuild bookkeeping: the high-water mark of votes.updated_at that each
+-- congress's vote_similarity rows were last built from. The ingester rebuilds a
+-- congress whenever its max(votes.updated_at) exceeds built_through (or no row
+-- exists yet), and advances built_through only after a successful rebuild — so a
+-- failed or interrupted rebuild leaves the congress stale and is retried next run.
+CREATE TABLE vote_similarity_state (
+  congress      SMALLINT    PRIMARY KEY,
+  built_through TIMESTAMPTZ NOT NULL
+);
+
+COMMENT ON TABLE vote_similarity_state IS E'@omit\nRebuild bookkeeping for vote_similarity — internal, not exposed via GraphQL.';
+
+-- ---------------------------------------------------------------------------
 -- BILL COSPONSORS
 -- ---------------------------------------------------------------------------
 CREATE TABLE bill_cosponsors (
