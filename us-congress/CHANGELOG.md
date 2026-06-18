@@ -22,7 +22,8 @@ Internal changes (scraper/ingester plumbing, deployment, observability, docs too
 ### Deprecation policy
 
 Because the API is versionless, we avoid breaking changes. When a field or type must change
-incompatibly, the old one is marked `@deprecated` and remains available for **at least 90 days**.
+incompatibly, the old one is marked `@deprecated` and remains available for **at least 3 days**.
+We understand that this is an uncommonly short deprecation period, but we intend to increase it once GovQL is more full-featured/stable and/or once there are more users. 
 Planned removals are announced under `Deprecated` here before they happen and then recorded
 under `Removed`.
 
@@ -31,7 +32,6 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
-_Nothing yet. Add consumer-facing changes here in the same PR that makes them._
 
 ## [2026-06-17] — Baseline
 
