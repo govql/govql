@@ -164,6 +164,10 @@ const config: Config = {
               label: 'Schema Overview',
               to: '/docs/schema',
             },
+            {
+              label: 'Changelog',
+              to: '/docs/changelog',
+            },
           ],
         },
         {

@@ -56,6 +56,19 @@ done
 ```
 ---
 
+## Changelog
+
+Consumer-facing API changes are tracked in [`CHANGELOG.md`](CHANGELOG.md) ([Keep a Changelog](https://keepachangelog.com/) format, date-stamped — the API is versionless and evolves additively, so there are no release tags).
+
+- **Scope:** only changes a person querying the API would notice — new/changed types, fields, enums, filters, connections; deprecations and removals; query behavior (rate/depth/complexity limits, pagination, errors); and data coverage. Internal scraper/ingester/infra/docs changes do **not** belong here.
+- **When you make a consumer-facing change:** add a bullet under the `## [Unreleased]` heading in the same PR, using the relevant category (Added / Changed / Deprecated / Removed / Fixed / Security). The PR template has a checkbox reminder.
+- **Cutting an entry:** when a notable batch ships (typically at deploy), rename `## [Unreleased]` to today's date (`## [YYYY-MM-DD]`) and add a fresh empty `Unreleased` section above it.
+- **Deprecations:** mark fields `@deprecated` and keep them for ≥90 days; announce under `Deprecated` before removal. See the policy at the top of `CHANGELOG.md`.
+
+The changelog is rendered on the docs site at `/docs/changelog`, as a section in the API Reference sidebar. The page `docs/docs/schema/changelog.md` is **generated** from `CHANGELOG.md` by `docs/scripts/sync-changelog.mjs` (runs automatically on `npm run build` / `npm run start`; run `npm run sync-changelog` to regenerate manually). Edit `CHANGELOG.md`, not the generated page.
+
+---
+
 ## Deploying to DigitalOcean
 
 ### 1. Root-only setup
