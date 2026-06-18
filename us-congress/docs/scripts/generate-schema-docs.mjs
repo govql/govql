@@ -557,6 +557,14 @@ function main() {
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
+  // Sidebar category label. The folder is lowercase ('tables') to keep URLs
+  // lowercase, but the sidebar should read "Tables" to match sibling labels.
+  writeFileSync(
+    join(OUTPUT_DIR, '_category_.json'),
+    JSON.stringify({ label: 'Tables', position: 2 }, null, 2) + '\n',
+    'utf8',
+  );
+
   let written = 0;
   for (let i = 0; i < TABLE_ORDER.length; i++) {
     const tableName = TABLE_ORDER[i];
