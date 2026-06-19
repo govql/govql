@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Parses db/schema.sql and generates per-table MDX docs under docs/schema/tables/.
+ * Parses the sequenced db/*.sql schema files and generates per-table MDX docs
+ * under docs/schema/tables/.
  * Run via:  node scripts/generate-schema-docs.mjs
  * Or via:   npm run generate-schema-docs   (from us-congress/docs/)
  *
@@ -8,12 +9,12 @@
  * Re-run whenever the schema changes.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = join(__dirname, '../../db/schema.sql');
+const DB_DIR = join(__dirname, '../../db');
 const OUTPUT_DIR = join(__dirname, '../docs/schema/tables');
 
 // ── Type mapping ─────────────────────────────────────────────────────────────
@@ -363,11 +364,17 @@ function parseSchema(sql) {
     }
   }
 
-  // Build FK relationships
+  // Build FK relationships — only among documented tables (those with per-type
+  // pages, i.e. in TABLE_ORDER). Aggregate tables like member_party_agreement and
+  // vote_similarity are documented in the hand-written Aggregation section rather
+  // than as first-class pages, so their FKs are not surfaced as relationships on
+  // the core entity pages.
   for (const [tName, table] of Object.entries(tables)) {
+    if (!TABLE_ORDER.includes(tName)) continue;
     for (const col of table.columns) {
       if (!col.references) continue;
       const { table: refTable } = col.references;
+      if (!TABLE_ORDER.includes(refTable)) continue;
 
       // Forward: on this table's type, field → referenced type
       const refTypeName = TYPE_NAME[refTable] || snakeToPascal(refTable);
@@ -380,15 +387,13 @@ function parseSchema(sql) {
       });
 
       // Reverse: on referenced table's type, connection → this table
-      if (tables[refTable]) {
-        const revField = `${snakeToCamel(tName)}By${snakeToPascal(col.name)}`;
-        tables[refTable].reverseRefs.push({
-          field: revField,
-          returns: CONNECTION_NAME[tName] || `${TYPE_NAME[tName]}sConnection`,
-          viaField: col.gqlName,
-          fromTable: tName,
-        });
-      }
+      const revField = `${snakeToCamel(tName)}By${snakeToPascal(col.name)}`;
+      tables[refTable].reverseRefs.push({
+        field: revField,
+        returns: CONNECTION_NAME[tName] || `${TYPE_NAME[tName]}sConnection`,
+        viaField: col.gqlName,
+        fromTable: tName,
+      });
     }
   }
 
@@ -552,7 +557,14 @@ function generateTableMdx(table, position) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main() {
-  const sql = readFileSync(SCHEMA_PATH, 'utf8');
+  // Schema lives across sequenced files (001-schema.sql, 002-*.sql, ...).
+  // Concatenate them in filename order so the parser sees the full schema and
+  // later files' changes (new tables, restated comments) apply on top.
+  const sql = readdirSync(DB_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => readFileSync(join(DB_DIR, f), 'utf8'))
+    .join('\n');
   const tables = parseSchema(sql);
 
   mkdirSync(OUTPUT_DIR, { recursive: true });

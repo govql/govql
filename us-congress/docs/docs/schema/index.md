@@ -238,5 +238,5 @@ party at once.
 ---
 
 :::note
-The per-type pages in this section are generated from [`db/schema.sql`](https://github.com/govql/govql/blob/main/us-congress/db/schema.sql) by `scripts/generate-schema-docs.mjs`. Re-run `npm run generate-schema-docs` after schema changes.
+The per-type pages in this section are generated from the [`db/`](https://github.com/govql/govql/tree/main/us-congress/db) schema files by `scripts/generate-schema-docs.mjs`. Re-run `npm run generate-schema-docs` after schema changes.
 :::
