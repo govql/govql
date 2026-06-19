@@ -128,7 +128,7 @@ Reverse relationships (one-to-many) return a connection with `nodes`:
 
 ### Aggregation
 
-Some common counts are exposed as **precomputed aggregates** — the database does
+Some common counts are exposed as **aggregates** — the database does
 the grouping, so you don't have to fetch every position row and tally it
 client-side. Each is a filterable connection like any other type. Filter them to
 the slice you care about (a vote, a member, a congress) rather than scanning
