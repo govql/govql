@@ -276,16 +276,51 @@ CREATE TABLE vote_similarity (
 COMMENT ON TABLE vote_similarity IS E'Pairwise voting agreement, per congress: one row per (congress, chamber, member_a, member_b) with shared_votes (both cast Yea/Nay) and agreed (voted the same). Pairs are stored once with member_a < member_b. Maintained by the vote ingester. Compute agreement as agreed::float / shared_votes.';
 
 -- Rebuild bookkeeping: the high-water mark of votes.updated_at that each
--- congress's vote_similarity rows were last built from. The ingester rebuilds a
--- congress whenever its max(votes.updated_at) exceeds built_through (or no row
--- exists yet), and advances built_through only after a successful rebuild — so a
--- failed or interrupted rebuild leaves the congress stale and is retried next run.
+-- congress's precomputed-aggregate rows were last built from. The ingester
+-- rebuilds a congress whenever its max(votes.updated_at) exceeds built_through
+-- (or no row exists yet), and advances built_through only after a successful
+-- rebuild — so a failed or interrupted rebuild leaves the congress stale and is
+-- retried next run. Governs both vote_similarity and member_party_agreement,
+-- which are rebuilt together in one transaction per congress.
 CREATE TABLE vote_similarity_state (
   congress      SMALLINT    PRIMARY KEY,
   built_through TIMESTAMPTZ NOT NULL
 );
 
-COMMENT ON TABLE vote_similarity_state IS E'@omit\nRebuild bookkeeping for vote_similarity — internal, not exposed via GraphQL.';
+COMMENT ON TABLE vote_similarity_state IS E'@omit\nRebuild bookkeeping for the per-congress precomputed aggregates (vote_similarity, member_party_agreement) — internal, not exposed via GraphQL.';
+
+-- ---------------------------------------------------------------------------
+-- MEMBER-VS-PARTY AGREEMENT (all congresses) — incrementally maintained table
+-- For each member, how often they voted with each party: one row per
+-- (congress, chamber, bioguide_id, member_party, other_party). On each vote a
+-- party's "position" is its strict-majority of Yea/Nay; agreement = the member's
+-- Yea/Nay matched that majority. shared_votes counts votes where the member cast
+-- Yea/Nay AND other_party had a determinable majority; agreed counts the matches.
+--
+-- other_party ranges over every party including the member's own — the own-party
+-- row is a loyalty signal (and its inverse, a defection signal). member_party is
+-- the member's party on the counted votes; a mid-congress party-switcher (rare)
+-- splits into separate rows per party held.
+--
+-- Built per congress from vote_positions (party snapshotted at vote time) joined
+-- to votes (for congress/chamber) — plain GROUP BYs, no roster join. Rebuilt by
+-- the same per-congress incremental path as vote_similarity (see ingest-votes.js).
+-- ---------------------------------------------------------------------------
+CREATE TABLE member_party_agreement (
+  congress       SMALLINT NOT NULL,
+  chamber        CHAR(1)  NOT NULL,
+  bioguide_id    TEXT     NOT NULL REFERENCES legislators (bioguide_id),
+  member_party   TEXT     NOT NULL,      -- member's party on the counted votes
+  other_party    TEXT     NOT NULL,      -- party compared against; includes own party (= loyalty)
+  shared_votes   INT      NOT NULL,      -- votes where member cast Yea/Nay AND other_party had a majority
+  agreed         INT      NOT NULL,      -- of those, votes where member matched other_party's majority
+  -- Precomputed ratio so GraphQL can orderBy AGREEMENT_RATE_DESC without client-side sorting.
+  agreement_rate REAL GENERATED ALWAYS AS (agreed::real / NULLIF(shared_votes, 0)) STORED,
+
+  PRIMARY KEY (congress, chamber, bioguide_id, member_party, other_party)
+);
+
+COMMENT ON TABLE member_party_agreement IS E'How often each member voted with each party, per congress: one row per (congress, chamber, bioguide_id, member_party, other_party). agreement_rate = agreed / shared_votes, where agreement on a vote means the member''s Yea/Nay matched that party''s strict-majority position. other_party includes the member''s own party (loyalty). Maintained by the vote ingester.';
 
 -- ---------------------------------------------------------------------------
 -- BILL COSPONSORS
