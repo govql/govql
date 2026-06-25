@@ -37,6 +37,14 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+### Added
+
+- **Member-vs-party voting agreement** via the `member_party_agreement` type: for each congress
+  and chamber, how often a member voted with each party's majority position — `shared_votes`,
+  `agreed`, and a precomputed `agreement_rate` (`agreed / shared_votes`, sortable via
+  `orderBy: AGREEMENT_RATE_DESC`). `other_party` includes the member's own party (a loyalty
+  measure). Maintained incrementally by the ingester across all congresses. (#49)
+
 
 ## [2026-06-17] — Baseline
 

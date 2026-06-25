@@ -128,10 +128,11 @@ Reverse relationships (one-to-many) return a connection with `nodes`:
 
 ### Aggregation
 
-Some common counts are exposed as **aggregation views** — the database does the
-grouping, so you don't have to fetch every position row and tally it client-side.
-Each is a filterable connection like any other type. Filter them to the slice you
-care about (a vote, a member) rather than scanning everything.
+Some common counts are exposed as **aggregates** — the database does
+the grouping, so you don't have to fetch every position row and tally it
+client-side. Each is a filterable connection like any other type. Filter them to
+the slice you care about (a vote, a member, a congress) rather than scanning
+everything.
 
 **Party breakdown of a vote** — how each party split, in one round-trip:
 
@@ -200,8 +201,42 @@ usually `chamber`). Find a member's closest allies in a given congress:
 Pairs are stored once with `memberA < memberB`, so to find all of one member's
 pairings you may need to match on `memberA` **or** `memberB`.
 
+**Member-vs-party agreement** — how often each member voted *with a party* is
+precomputed in `allMemberPartyAgreements` (all congresses). On each vote, a party's
+"position" is its majority of Yea/Nay, and a member agrees when their Yea/Nay
+matches it. Each row gives `sharedVotes` (votes where the member cast Yea/Nay and
+the party had a majority), `agreed`, and `agreementRate` (`agreed / sharedVotes`,
+ready to sort on). `otherParty` includes the member's *own* party — that row is a
+party-loyalty measure. Which Democrats most often voted with Republicans this
+Congress:
+
+```graphql
+{
+  allMemberPartyAgreements(
+    filter: {
+      congress: { equalTo: 119 }
+      memberParty: { equalTo: "D" }
+      otherParty: { equalTo: "R" }
+      sharedVotes: { greaterThanOrEqualTo: 20 }
+    }
+    orderBy: AGREEMENT_RATE_DESC
+    first: 5
+  ) {
+    nodes {
+      agreementRate
+      sharedVotes
+      legislatorByBioguideId { officialFull }
+    }
+  }
+}
+```
+
+The `sharedVotes` floor filters out members with too few comparable votes to be
+meaningful. Drop `memberParty`/`otherParty` to compare a member against every
+party at once.
+
 ---
 
 :::note
-The per-type pages in this section are generated from [`db/schema.sql`](https://github.com/govql/govql/blob/main/us-congress/db/schema.sql) by `scripts/generate-schema-docs.mjs`. Re-run `npm run generate-schema-docs` after schema changes.
+The per-type pages in this section are generated from the [`db/`](https://github.com/govql/govql/tree/main/us-congress/db) schema files by `scripts/generate-schema-docs.mjs`. Re-run `npm run generate-schema-docs` after schema changes.
 :::

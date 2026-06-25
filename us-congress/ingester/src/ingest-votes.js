@@ -279,7 +279,7 @@ async function processVoteFile(client, filePath) {
 // updated_at. Cheap: votes is small and congress is indexed.
 //
 // Returns an array of congress numbers. The watermark itself is captured inside
-// rebuildSimilarityForCongress (from the same MVCC snapshot it builds from), not
+// rebuildAggregatesForCongress (from the same MVCC snapshot it builds from), not
 // here — so it keeps full microsecond precision rather than being truncated by a
 // round-trip through a JS Date (which only holds milliseconds, and made every
 // congress look perpetually stale).
@@ -297,27 +297,29 @@ async function staleCongresses(client) {
 }
 
 // ---------------------------------------------------------------------------
-// Rebuild the voting-similarity rows for a single congress, and advance its
-// watermark — all in one transaction.
+// Rebuild the per-congress precomputed aggregates (vote_similarity and
+// member_party_agreement) for a single congress, and advance its watermark —
+// all in one transaction.
 //
-// DELETE + INSERT (+ watermark UPSERT) inside one transaction so concurrent
-// readers see the old partition until the new one is committed atomically
-// (never an empty slice), and so the watermark can only advance if the rebuild
-// committed. Scoped to one congress via a CTE prefilter so cost is independent
-// of how much historical data exists. Excludes Present / Not Voting / VP (only
-// Yea/Nay count toward agreement).
+// Each table's rows for the congress are DELETE+INSERTed and the watermark is
+// UPSERTed inside one transaction, so concurrent readers see the old rows until
+// the new ones commit atomically (never an empty slice), and the watermark can
+// only advance if the whole rebuild committed. Each build is scoped to one
+// congress via a CTE prefilter so cost is independent of how much historical
+// data exists. Only Yea/Nay positions count (Present / Not Voting / VP ignored).
 //
-// The transaction runs at REPEATABLE READ so the similarity build and the
-// watermark capture (max(votes.updated_at), computed in SQL) read one consistent
-// snapshot: built_through reflects exactly the data that was built, and any vote
-// changed after that snapshot stays ahead of the watermark and is rebuilt next
-// run. Capturing the watermark in SQL (rather than passing a JS value in) keeps
-// its full microsecond precision — a JS Date truncates to milliseconds, which
-// made max(updated_at) > built_through perpetually true.
+// The transaction runs at REPEATABLE READ so both builds and the watermark
+// capture (max(votes.updated_at), computed in SQL) read one consistent snapshot:
+// built_through reflects exactly the data that was built, and any vote changed
+// after that snapshot stays ahead of the watermark and is rebuilt next run.
+// Capturing the watermark in SQL (rather than passing a JS value in) keeps its
+// full microsecond precision — a JS Date truncates to milliseconds, which made
+// max(updated_at) > built_through perpetually true.
 // ---------------------------------------------------------------------------
-async function rebuildSimilarityForCongress(client, congress) {
+async function rebuildAggregatesForCongress(client, congress) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
   try {
+    // Pairwise member-to-member agreement.
     await client.query('DELETE FROM vote_similarity WHERE congress = $1', [
       congress,
     ]);
@@ -338,6 +340,44 @@ async function rebuildSimilarityForCongress(client, congress) {
        GROUP BY a.congress, a.chamber, a.bioguide_id, b.bioguide_id`,
       [congress],
     );
+
+    // Member-vs-party agreement: each member compared to every party's
+    // strict-majority position per vote (incl. their own party = loyalty).
+    await client.query(
+      'DELETE FROM member_party_agreement WHERE congress = $1',
+      [congress],
+    );
+    await client.query(
+      `INSERT INTO member_party_agreement
+         (congress, chamber, bioguide_id, member_party, other_party, shared_votes, agreed)
+       WITH pos AS (
+         SELECT vp.vote_id, vp.bioguide_id, vp.position, vp.party, v.chamber
+         FROM vote_positions vp
+         JOIN votes v ON v.vote_id = vp.vote_id
+         WHERE v.congress = $1 AND vp.position IN ('Yea', 'Nay')
+       ),
+       party_majority AS (
+         SELECT vote_id, party AS other_party,
+                CASE
+                  WHEN count(*) FILTER (WHERE position = 'Yea')
+                     > count(*) FILTER (WHERE position = 'Nay') THEN 'Yea'
+                  WHEN count(*) FILTER (WHERE position = 'Nay')
+                     > count(*) FILTER (WHERE position = 'Yea') THEN 'Nay'
+                  ELSE NULL
+                END AS majority_position
+         FROM pos
+         GROUP BY vote_id, party
+       )
+       SELECT $1, p.chamber, p.bioguide_id, p.party, pm.other_party,
+              count(*)::int,
+              count(*) FILTER (WHERE p.position = pm.majority_position)::int
+       FROM pos p
+       JOIN party_majority pm
+         ON pm.vote_id = p.vote_id AND pm.majority_position IS NOT NULL
+       GROUP BY p.chamber, p.bioguide_id, p.party, pm.other_party`,
+      [congress],
+    );
+
     await client.query(
       `INSERT INTO vote_similarity_state (congress, built_through)
        SELECT $1, max(updated_at) FROM votes WHERE congress = $1
@@ -389,7 +429,8 @@ async function run() {
       `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
     );
 
-    // Rebuild vote_similarity for every congress whose vote data has changed
+    // Rebuild the per-congress precomputed aggregates (vote_similarity and
+    // member_party_agreement) for every congress whose vote data has changed
     // since its last successful rebuild (see staleCongresses). This is driven by
     // actual staleness, not by what was ingested this run, so a rebuild that
     // failed or was interrupted on a previous run is retried automatically — its
@@ -402,14 +443,14 @@ async function run() {
     for (const congress of stale) {
       try {
         const t0 = Date.now();
-        await rebuildSimilarityForCongress(client, congress);
+        await rebuildAggregatesForCongress(client, congress);
         logger.info(
-          `Rebuilt vote_similarity for congress ${congress} in ${Date.now() - t0} ms`,
+          `Rebuilt aggregates for congress ${congress} in ${Date.now() - t0} ms`,
         );
       } catch (err) {
         logger.error(
-          `vote_similarity rebuild for congress ${congress} failed ` +
-          `(votes are ingested; similarity is stale, will retry next run): ${err.message}`,
+          `aggregate rebuild for congress ${congress} failed ` +
+          `(votes are ingested; aggregates are stale, will retry next run): ${err.message}`,
         );
       }
     }
