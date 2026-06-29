@@ -12,3 +12,5 @@ dist/
 
 # MCP client config — typically contains local paths and is per-user
 .mcp.json
+
+certs/
