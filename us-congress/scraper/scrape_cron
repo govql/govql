@@ -1,5 +1,7 @@
 # Source container environment so HEALTHCHECK_* vars are available.
+# Job output is sent to PID 1's stdout/stderr (cron -f) so it flows to the
+# container's logs → Vector → Loki, like every other service.
 SHELL=/bin/sh
 
-35 * * * * root . /etc/environment; cd /congress && /usr/local/bin/usc-run votes --force >> /var/log/cron.log 2>&1 && [ -n "$HEALTHCHECK_VOTES_SCRAPE_URL" ] && curl -fsS --retry 3 "$HEALTHCHECK_VOTES_SCRAPE_URL" > /dev/null 2>&1; true
-0  2 * * * root /usr/local/bin/update-legislators.sh >> /var/log/cron.log 2>&1
+35 * * * * root . /etc/environment; cd /congress && /usr/local/bin/usc-run votes --force > /proc/1/fd/1 2>/proc/1/fd/2 && [ -n "$HEALTHCHECK_VOTES_SCRAPE_URL" ] && curl -fsS --retry 3 "$HEALTHCHECK_VOTES_SCRAPE_URL" > /dev/null 2>&1; true
+0  2 * * * root /usr/local/bin/update-legislators.sh > /proc/1/fd/1 2>/proc/1/fd/2

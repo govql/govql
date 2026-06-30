@@ -312,3 +312,61 @@ Flyway runs the new `db/migrations/V*.sql`, then the API server restarts and re-
 > ```
 >
 > A routine schema-only deploy that merely restarts `server` in place won't usually trigger this; a deploy that *recreates* `server` (container config change, image rebuild, or a postgres recreate) will.
+
+## Hardening against probing
+
+The box is continuously probed by automated scanners (raw-IP TLS handshakes, WordPress/PHP
+webshell paths, etc.). None of it is a breach, but the defaults let it through noisily. The
+nginx config (`nginx/nginx.conf`) handles the bulk of it cheaply:
+
+- **Real 404s.** Unknown paths return a real `404` (the themed Docusaurus 404 page) instead of
+  silently serving the homepage with a `200`. This stops advertising "everything exists" to
+  scanners and makes the logs meaningful — a successful probe is now distinguishable from a
+  failed one.
+- **Refusing junk.** Known probe paths (`/wp-admin`, `/wp-login`, …) and server-side script
+  extensions (`.php`, `.asp`, `.jsp`, `.env`, …) get `444` (connection closed, no response).
+  Nothing here is WordPress or a scripting runtime, so these can never be legitimate.
+- **Rate limiting.** Per-IP request and connection limits (`limit_req` / `limit_conn`) cap
+  abusive bursts and return `429`. The static site's limits are generous (a page load pulls many
+  assets at once, and immutable `/assets/` + `/img/` are exempt from request throttling); the API
+  limit is a coarse flood shield in front of PostGraphile's own finer 100 req/min per-IP limiter.
+- **Refusing raw-IP / unknown-host TLS.** A `:443` `default_server` with `ssl_reject_handshake`
+  rejects TLS handshakes that don't match a hostname we serve, so scanners hitting the raw IP
+  never get a request processed.
+
+The host firewall (`ufw`, see [Root-only setup](#1-root-only-setup)) already limits inbound to
+22/80/443, which covers the firewall-minimization side of hardening.
+
+### Deferred next layers (not yet implemented)
+
+These are higher-effort layers that live in infrastructure/account configuration rather than this
+repo. Documented here so the rationale isn't lost:
+
+- **Dynamic IP-blocking (fail2ban / CrowdSec).** Useful for shedding *repeat* offenders at the
+  kernel firewall and cutting log noise, but a *next* layer — the nginx rules plus the app's
+  per-IP limiter already absorb most of the volume. Classic **fail2ban fits this stack poorly**:
+  it wants a host log file, but our logs go straight to stdout → Vector → Loki (no file on disk),
+  and it's per-IP, so it can't touch the distributed/rotating cloud-IP scanning that dominates the
+  traffic. If we adopt dynamic blocking, prefer **CrowdSec** — it reads container logs over the
+  Docker socket (no host log file), runs as a Compose service, has decoupled "bouncers"
+  (host-firewall / in-nginx / Cloudflare), and ships crowdsourced blocklists that *do* cover
+  distributed scanners.
+- **Cloudflare (highest-value next move).** Putting the site behind Cloudflare hides the origin
+  IP (so raw-IP scanning can be firewalled off entirely), uses edge reputation to handle
+  distributed scanners, and edge-caches the static site. It's an infrastructure migration, not a
+  code change, with prerequisites worth planning for:
+  1. **DNS / certs.** The proxy requires Cloudflare to serve the proxied records, which breaks the
+     current acme.sh **Gandi DNS-01** wildcard issuance (see [Obtain a wildcard TLS
+     certificate](#5-obtain-a-wildcard-tls-certificate)). Switch to Cloudflare's DNS-01 plugin, or
+     use a Cloudflare **Origin CA** cert on the origin with SSL mode **Full (strict)**.
+  2. **Real client IP.** Once proxied, nginx sees Cloudflare's IP. Add `set_real_ip_from <CF
+     ranges>` + `real_ip_header CF-Connecting-IP` (realip module) so the rate limits **and** the
+     API's `X-Forwarded-For` logic still see the true client — otherwise every visitor collapses
+     to a handful of Cloudflare IPs and both limiters misbehave.
+  3. **Origin lockdown.** Restrict the host firewall to Cloudflare's IP ranges, or scanners simply
+     hit the raw IP and bypass the edge.
+  4. **API subdomain.** Disable caching for `api.govql.us` (dynamic GraphQL); Cloudflare's free
+     100s edge timeout is fine against the 30s `proxy_read_timeout`.
+
+  The free tier covers DDoS mitigation, Bot Fight Mode, a few custom WAF rules, and one basic
+  rate-limiting rule; the managed OWASP ruleset requires a paid plan.
