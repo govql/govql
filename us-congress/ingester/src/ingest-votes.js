@@ -297,8 +297,8 @@ async function run() {
     if (!ready) {
       logger.info(
         `Votes ingestion skipped — fetch cursor ` +
-        `(${fetchCursor?.toISOString() ?? 'none'}) has not advanced past load cursor ` +
-        `(${loadCursor?.toISOString() ?? 'none'}); nothing new to load`,
+        `(${fetchCursor ?? 'none'}) has not advanced past load cursor ` +
+        `(${loadCursor ?? 'none'}); nothing new to load`,
       );
       return;
     }

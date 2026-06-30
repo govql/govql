@@ -71,6 +71,19 @@ async function staleCongresses(client) {
 async function rebuildAggregatesForCongress(client, congress) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
   try {
+    // Memory-bound the rebuild to the 256M postgres container. The pairwise
+    // self-join emits ~100M rows; at the cluster-default work_mem (2MB) the
+    // HashAggregate mis-estimates its group count, spills those rows across ~128
+    // temp partitions, and the temp-file page cache OOM-kills the container. A
+    // larger transaction-local work_mem keeps the aggregate (~12MB for the ~150k
+    // real groups) in memory with no spill; disabling JIT and parallel workers
+    // avoids their per-worker memory and compile overhead. SET LOCAL scopes this to
+    // the rebuild transaction only — a cluster-wide work_mem this large would let
+    // every connection blow the cap. See AGENTS.md "Aggregate rebuild memory".
+    await client.query("SET LOCAL work_mem = '32MB'");
+    await client.query('SET LOCAL max_parallel_workers_per_gather = 0');
+    await client.query('SET LOCAL jit = off');
+
     // Pairwise member-to-member agreement.
     await client.query('DELETE FROM vote_similarity WHERE congress = $1', [
       congress,

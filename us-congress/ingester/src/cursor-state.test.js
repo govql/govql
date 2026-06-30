@@ -53,18 +53,24 @@ test('isReady: accepts Date objects, not just ISO strings (pg returns Date)', ()
   );
 });
 
-test('readCursor: returns the cursor for a (source, stage), null when absent', async () => {
-  const ts = new Date('2026-06-30T12:35:00Z');
+test('readCursor: returns the cursor as a full-precision string, null when absent', async () => {
+  const ts = '2026-06-30T12:35:00.905108Z';
   const present = stubClient([{ rows: [{ cursor: ts }] }]);
   assert.equal(await readCursor(present, 'congress-votes', 'fetch'), ts);
   assert.deepEqual(present.calls[0].params, ['congress-votes', 'fetch']);
+  // Pin the precision-preserving read: format to microseconds in UTC rather than
+  // letting pg return a JS Date (which truncates to ms). See AGENTS.md.
+  assert.match(present.calls[0].text, /to_char\(\s*cursor AT TIME ZONE 'UTC'/i);
+  assert.match(present.calls[0].text, /\.US/);
 
   const absent = stubClient([{ rows: [] }]);
   assert.equal(await readCursor(absent, 'congress-votes', 'load'), null);
 });
 
 test('advanceLoadCursor: upserts the captured fetch value into the load stage', async () => {
-  const value = new Date('2026-06-30T12:35:00Z');
+  // The captured value is the full-precision string from readCursor, written back
+  // verbatim so load equals the consumed fetch value to the microsecond.
+  const value = '2026-06-30T12:35:00.905108Z';
   const client = stubClient();
   await advanceLoadCursor(client, 'congress-votes', value);
 
@@ -80,8 +86,8 @@ test('advanceLoadCursor: upserts the captured fetch value into the load stage', 
 });
 
 test('loadReadiness: reads fetch then load and reports ready + captured fetch', async () => {
-  const fetchTs = new Date('2026-06-30T12:35:00Z');
-  const loadTs = new Date('2026-06-30T11:50:00Z');
+  const fetchTs = '2026-06-30T12:35:00.905108Z';
+  const loadTs = '2026-06-30T11:50:00.000000Z';
   // Responses are returned in call order: first readCursor('fetch'), then 'load'.
   const client = stubClient([{ rows: [{ cursor: fetchTs }] }, { rows: [{ cursor: loadTs }] }]);
 
@@ -91,8 +97,10 @@ test('loadReadiness: reads fetch then load and reports ready + captured fetch', 
   assert.deepEqual(client.calls[1].params, ['congress-votes', 'load']);
 });
 
-test('loadReadiness: not ready when fetch has not advanced past load', async () => {
-  const ts = new Date('2026-06-30T12:00:00Z');
+test('loadReadiness: not ready when load equals the exact fetch value consumed', async () => {
+  // load holds the exact microsecond fetch value it consumed (precision preserved),
+  // so when nothing new is scraped the two are identical → skip.
+  const ts = '2026-06-30T12:00:00.905108Z';
   const client = stubClient([{ rows: [{ cursor: ts }] }, { rows: [{ cursor: ts }] }]);
   const r = await loadReadiness(client, 'congress-votes');
   assert.equal(r.ready, false);

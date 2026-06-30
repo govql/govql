@@ -15,6 +15,12 @@
  * AND either the load has never run (`loadCursor` null) or fetch has advanced
  * past what load last consumed (`fetchCursor > loadCursor`). With no fetch
  * cursor yet there is nothing to consume, so it is not ready (skip).
+ *
+ * Accepts the full-precision ISO strings from readCursor (or Date objects). The
+ * `new Date()` comparison truncates both sides to milliseconds, which is safe:
+ * `advanceLoadCursor` stores the exact `fetch` value, so when nothing new has been
+ * scraped `load` equals `fetch` to the microsecond and the comparison is equal
+ * (skip). Distinct scrapes are an hour apart, never within the same millisecond.
  */
 export function isReady(fetchCursor, loadCursor) {
   if (fetchCursor == null) return false;
@@ -23,12 +29,21 @@ export function isReady(fetchCursor, loadCursor) {
 }
 
 /**
- * Read the cursor for one `(source_name, stage)`. Returns the stored
- * `TIMESTAMPTZ` (a `Date`, as pg deserializes it) or null when no row exists.
+ * Read the cursor for one `(source_name, stage)` as a full-precision UTC
+ * ISO-8601 string (microseconds), or null when absent.
+ *
+ * Deliberately NOT a JS `Date`: pg deserializes `TIMESTAMPTZ` to a `Date`, which
+ * holds only milliseconds, but Postgres `now()` has microsecond precision. If the
+ * captured `fetch` value round-tripped through a `Date`, `advanceLoadCursor` would
+ * store a `load` cursor a few microseconds *behind* the `fetch` value it actually
+ * consumed — leaving `fetch > load` true forever and the load perpetually "ready".
+ * Reading as text preserves the exact value so `load` can equal `fetch` to the
+ * microsecond. See AGENTS.md "JS millisecond vs Postgres microsecond timestamps".
  */
 export async function readCursor(client, sourceName, stage) {
   const { rows } = await client.query(
-    `SELECT cursor FROM source_state WHERE source_name = $1 AND stage = $2`,
+    `SELECT to_char(cursor AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor
+     FROM source_state WHERE source_name = $1 AND stage = $2`,
     [sourceName, stage],
   );
   return rows.length ? rows[0].cursor : null;
