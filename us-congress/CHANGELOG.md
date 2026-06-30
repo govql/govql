@@ -32,6 +32,10 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+### Security
+
+- Hardened the service against automated abuse and probing. (#36)
+
 ## [2026-06-25]
 
 ### Added
