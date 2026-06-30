@@ -304,3 +304,11 @@ dotenvx run -- docker compose up -d --build
 Flyway runs the new `db/migrations/V*.sql`, then the API server restarts and re-introspects the schema. If the change touched documented tables, also rebuild the docs site (see [Deploying changes to Docusaurus site](#deploying-changes-to-docusaurus-site)).
 
 > **First time only:** this production database predates Flyway, so run the one-time `baseline` (see [Adopting Flyway on an existing database](#adopting-flyway-on-an-existing-database-one-time)) **before** the first `up` that includes the `flyway` service — otherwise Flyway would try to recreate the existing schema and fail.
+
+> **502 after the deploy?** If the `up` **recreated** the `server` container (e.g. the postgres container was also recreated, which chains a server recreate), nginx may still be proxying to the old container's IP — it resolves the `server` hostname at startup and caches it. The fix is to bounce nginx so it re-resolves:
+>
+> ```bash
+> docker compose restart nginx
+> ```
+>
+> A routine schema-only deploy that merely restarts `server` in place won't usually trigger this; a deploy that *recreates* `server` (container config change, image rebuild, or a postgres recreate) will.
