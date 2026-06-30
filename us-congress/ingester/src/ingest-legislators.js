@@ -218,17 +218,25 @@ async function run() {
       }
     }
 
-    // Advance the load cursor to the fetch value captured at run start — only now
-    // that the walk completed without throwing. A crash mid-walk leaves it
-    // unadvanced, so the next run re-checks readiness and re-walks idempotently.
-    await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
-
-    await client.query(
-      `UPDATE ingestion_runs
-       SET finished_at = now(), status = 'success', records_upserted = $1
-       WHERE id = $2`,
-      [totalUpserted, runId],
-    );
+    // Advance the load cursor to the captured fetch value and mark the run
+    // successful atomically, in one transaction — so the cursor and the run's
+    // status can never disagree. (A crash mid-walk never reaches here; a failure
+    // inside this block rolls back both, leaving the cursor unadvanced so the next
+    // run re-checks readiness and re-walks idempotently.)
+    await client.query('BEGIN');
+    try {
+      await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
+      await client.query(
+        `UPDATE ingestion_runs
+         SET finished_at = now(), status = 'success', records_upserted = $1
+         WHERE id = $2`,
+        [totalUpserted, runId],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    }
 
     logger.info(
       `Legislators ingestion complete — upserted: ${totalUpserted}, failed: ${totalFailed}`,

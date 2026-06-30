@@ -17,10 +17,19 @@ if [ -z "$SOURCE_NAME" ]; then
   exit 2
 fi
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
-  "INSERT INTO source_state (source_name, stage, cursor, updated_at)
-   VALUES ('$SOURCE_NAME', 'fetch', now(), now())
-   ON CONFLICT (source_name, stage)
-     DO UPDATE SET cursor = now(), updated_at = now();"
+# Pass the source name as a psql variable and interpolate it with :'src', which
+# quotes it as a SQL string literal (doubling any embedded quotes) — so a source
+# name can never break out of the literal and inject SQL. Today's callers pass
+# hardcoded literals, but the scraper holds full DB credentials, so this keeps the
+# script safe if a future caller ever passes a dynamic/config-derived name.
+#
+# The SQL is fed on stdin (quoted heredoc), NOT via `psql -c`: psql only performs
+# `:'var'` interpolation on stdin/file input, not on `-c` command strings.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v src="$SOURCE_NAME" <<'SQL'
+INSERT INTO source_state (source_name, stage, cursor, updated_at)
+VALUES (:'src', 'fetch', now(), now())
+ON CONFLICT (source_name, stage)
+  DO UPDATE SET cursor = now(), updated_at = now();
+SQL
 
 echo "$(date): advanced fetch cursor for ${SOURCE_NAME}"
