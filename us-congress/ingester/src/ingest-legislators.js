@@ -8,6 +8,11 @@
  * Dependency order: this script must run before ingest-votes.js because
  * vote_positions has a FK on legislators.bioguide_id.
  *
+ * Stage gate: this is the `load` stage for the legislators source. It runs only
+ * when the scraper's `fetch` cursor in source_state has advanced past the `load`
+ * cursor (see cursor-state.js); otherwise it is a clean no-op. The cron time is a
+ * soft schedule, not the correctness gate.
+ *
  * Expected files (relative to CONGRESS_DATA_DIR, default /congress):
  *   data/legislators/legislators-current.yaml
  *   data/legislators/legislators-historical.yaml
@@ -18,8 +23,12 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { pool } from './db.js';
 import { logger } from './logger.js';
+import { loadReadiness, advanceLoadCursor } from './cursor-state.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
+
+// Source key for the staged fetch→load cursor handshake in source_state.
+const SOURCE_NAME = 'congress-legislators';
 
 const LEGISLATOR_FILES = [
   'data/legislators/legislators-current.yaml',
@@ -143,20 +152,35 @@ async function replaceTerms(client, bioguideId, terms = []) {
 // ---------------------------------------------------------------------------
 
 async function run() {
-  const files = findLegislatorFiles();
-
-  if (files.length === 0) {
-    logger.error(
-      `No legislator YAML files found under ${DATA_DIR}/data/legislators/. ` +
-      'Ensure the scraper service has run update-legislators.sh at least once.',
-    );
-    process.exit(1);
-  }
-
   const client = await pool.connect();
   let runId;
 
   try {
+    // Readiness gate: run only when the scraper's fetch cursor has advanced past
+    // what we last loaded. Capture the fetch value now and advance load to exactly
+    // it on success. A not-ready run is a clean, logged no-op (exit 0) — including
+    // on a fresh system before the first legislators scrape, where there is no
+    // fetch cursor yet and no files synced.
+    const { fetchCursor, loadCursor, ready } = await loadReadiness(client, SOURCE_NAME);
+    if (!ready) {
+      logger.info(
+        `Legislators ingestion skipped — fetch cursor ` +
+        `(${fetchCursor?.toISOString() ?? 'none'}) has not advanced past load cursor ` +
+        `(${loadCursor?.toISOString() ?? 'none'}); nothing new to load`,
+      );
+      return;
+    }
+
+    // Fetch advanced, so the synced YAML must be present; its absence here is a
+    // real inconsistency, not a fresh-system no-op.
+    const files = findLegislatorFiles();
+    if (files.length === 0) {
+      throw new Error(
+        `No legislator YAML files found under ${DATA_DIR}/data/legislators/ ` +
+        'despite an advanced fetch cursor. Check the scraper\'s update-legislators.sh.',
+      );
+    }
+
     // Open an ingestion run record.
     const { rows } = await client.query(
       `INSERT INTO ingestion_runs (run_type, status)
@@ -193,6 +217,11 @@ async function run() {
         }
       }
     }
+
+    // Advance the load cursor to the fetch value captured at run start — only now
+    // that the walk completed without throwing. A crash mid-walk leaves it
+    // unadvanced, so the next run re-checks readiness and re-walks idempotently.
+    await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
 
     await client.query(
       `UPDATE ingestion_runs

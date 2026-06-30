@@ -1,8 +1,17 @@
 # Job output is sent to PID 1's stdout/stderr (crond -f) so it flows to the
 # container's logs → Vector → Loki, like every other service.
+#
+# These cron times are a SOFT SCHEDULE, not the correctness gate. Each load stage
+# gates on the scraper's fetch cursor in source_state (the fetch→load handshake)
+# and is a clean no-op when nothing new has been fetched — so exact timing
+# relative to the scraper no longer matters. build-aggregates self-gates on the
+# vote_similarity_state watermark.
 
-# Ingest legislators once per day at 02:15 (scraper runs legislators at 02:00).
+# Load legislators once per day at 02:15 (scraper syncs legislators at 02:00).
 15 2 * * * . /etc/environment; cd /app && node src/ingest-legislators.js > /proc/1/fd/1 2>/proc/1/fd/2
 
-# Ingest votes every hour at :50 (scraper runs votes at :35; 15-min buffer).
+# Load votes every hour at :50 (scraper scrapes votes at :35).
 50 * * * * . /etc/environment; cd /app && node src/ingest-votes.js > /proc/1/fd/1 2>/proc/1/fd/2
+
+# Build vote aggregates every hour at :55, after the votes load.
+55 * * * * . /etc/environment; cd /app && node src/build-aggregates.js > /proc/1/fd/1 2>/proc/1/fd/2

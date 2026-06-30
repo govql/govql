@@ -2,6 +2,9 @@
   "name": "govql-ingester",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "pg": "^8.20.0",
     "js-yaml": "^4.1.0"

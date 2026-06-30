@@ -5,9 +5,15 @@ services:
       dockerfile: ./scraper/Dockerfile
     restart: always
     environment:
+      # DATABASE_URL: the scraper advances each source's `fetch` cursor in
+      # source_state after a successful scrape (the fetch→load handshake).
+      - DATABASE_URL
       - HEALTHCHECK_VOTES_SCRAPE_URL
     volumes:
       - scraped-data:/congress
+    depends_on:
+      postgres:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -106,6 +112,8 @@ services:
       - DATABASE_URL
       - HEALTHCHECK_VOTES_INGEST_URL
       - HEALTHCHECK_LEGISLATORS_INGEST_URL
+      # Optional dead-man's-switch URL for the separate build-aggregates job.
+      - HEALTHCHECK_VOTE_AGGREGATES_URL
       # Cap the V8 heap — the ingester is mostly idle so 64 MB is ample.
       - NODE_OPTIONS=--max-old-space-size=64
     volumes:
