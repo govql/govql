@@ -43,7 +43,9 @@ services:
       - GRAFANA_READER_PASSWORD
     volumes:
       - postgres-data:/var/lib/postgresql
-      - ./db:/docker-entrypoint-initdb.d
+      # Only service-account roles run at initdb (fresh volume only). The schema
+      # itself is owned by Flyway — see the `flyway` service below.
+      - ./db/roles:/docker-entrypoint-initdb.d
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
@@ -53,6 +55,32 @@ services:
     deploy:
       resources:
         limits:
+          memory: 256M
+
+  # One-shot schema migrator. Runs `flyway migrate` on every `up` — applies any
+  # pending db/migrations/V*.sql then exits (idempotent: a no-op when nothing is
+  # pending). The server waits for it to finish (see server.depends_on) so
+  # PostGraphile always introspects the migrated schema. Pinned to a specific
+  # version for reproducible deploys; bump deliberately.
+  flyway:
+    image: flyway/flyway:12.9.0-alpine
+    command: migrate
+    restart: 'no'   # never restart a run-to-completion job
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - FLYWAY_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      - FLYWAY_USER=${POSTGRES_USER}
+      - FLYWAY_PASSWORD=${POSTGRES_PASSWORD}
+      - FLYWAY_DEFAULT_SCHEMA=public
+      - FLYWAY_LOCATIONS=filesystem:/flyway/sql
+    volumes:
+      - ./db/migrations:/flyway/sql:ro
+    deploy:
+      resources:
+        limits:
+          # Transient JVM job; generous cap so a migration is never OOM-killed.
           memory: 256M
 
   redis:
@@ -124,6 +152,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Wait for migrations to finish so PostGraphile introspects the new schema.
+      flyway:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Parses the sequenced db/*.sql schema files and generates per-table MDX docs
- * under docs/schema/tables/.
+ * Parses the Flyway migration SQL (db/migrations/V*.sql) and generates per-table
+ * MDX docs under docs/schema/tables/.
  * Run via:  node scripts/generate-schema-docs.mjs
  * Or via:   npm run generate-schema-docs   (from us-congress/docs/)
  *
@@ -14,7 +14,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_DIR = join(__dirname, '../../db');
+const DB_DIR = join(__dirname, '../../db/migrations');
 const OUTPUT_DIR = join(__dirname, '../docs/schema/tables');
 
 // ── Type mapping ─────────────────────────────────────────────────────────────
@@ -557,9 +557,10 @@ function generateTableMdx(table, position) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main() {
-  // Schema lives across sequenced files (001-schema.sql, 002-*.sql, ...).
+  // Schema lives across the Flyway migrations (V001__*.sql, V002__*.sql, ...).
   // Concatenate them in filename order so the parser sees the full schema and
-  // later files' changes (new tables, restated comments) apply on top.
+  // later migrations' changes (new tables, restated comments) apply on top.
+  // Non-DDL migrations (e.g. grant-only files) simply contribute no tables.
   const sql = readdirSync(DB_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort()

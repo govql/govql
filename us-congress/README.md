@@ -56,6 +56,25 @@ done
 ```
 ---
 
+## Database schema & migrations
+
+The Postgres schema is managed with [Flyway](https://documentation.red-gate.com/flyway). Migrations live in [`db/migrations/`](db/migrations), named `Vnnn__description.sql` (zero-padded, sequential). A one-shot `flyway` service applies any pending migrations automatically on every `docker compose up` — the API server waits for it to finish before starting — so **schema changes deploy with the same `up` command as code**, no manual `psql`.
+
+**To change the schema:** add the next migration, e.g. `db/migrations/V003__add_foo.sql`. Never edit a migration that has already been applied — Flyway checksums them — always add a new one. Keep migrations hand-written, readable SQL: the API reference pages are generated from them by [`docs/scripts/generate-schema-docs.mjs`](docs/scripts/generate-schema-docs.mjs) (re-run `npm run generate-schema-docs` after schema changes).
+
+**Service-account roles** (e.g. `grafana_reader`) are created at database init from [`db/roles/`](db/roles) (fresh volume only); their grants live in migrations (see `db/migrations/V002__grafana_reader_grants.sql`).
+
+### Adopting Flyway on an existing database (one-time)
+
+A database that already had the schema before Flyway must be **baselined** once, so Flyway records the current state as already-applied instead of trying to recreate it:
+
+```bash
+dotenvx run -- docker compose run --rm flyway \
+  -baselineVersion=1 -baselineDescription="pre-Flyway schema" baseline
+```
+
+After that, `docker compose up` applies only newer migrations. A brand-new (empty) database needs no baseline — Flyway builds it from `V001` on the first `up`.
+
 ## Changelog
 
 Consumer-facing API changes are tracked in [`CHANGELOG.md`](CHANGELOG.md) ([Keep a Changelog](https://keepachangelog.com/) format, date-stamped — the API is versionless and evolves additively, so there are no release tags).
@@ -270,3 +289,18 @@ cd /opt/govql/us-congress
 # We don't even need dotenvx since nginx doesn't need environment variables
 docker compose restart nginx
 ```
+
+## Deploying schema changes
+
+Schema changes ship like any other change — the `flyway` service applies pending migrations on `up`:
+
+```bash
+sudo -u govql -i
+cd /opt/govql/us-congress
+git checkout main && git pull
+dotenvx run -- docker compose up -d --build
+```
+
+Flyway runs the new `db/migrations/V*.sql`, then the API server restarts and re-introspects the schema. If the change touched documented tables, also rebuild the docs site (see [Deploying changes to Docusaurus site](#deploying-changes-to-docusaurus-site)).
+
+> **First time only:** this production database predates Flyway, so run the one-time `baseline` (see [Adopting Flyway on an existing database](#adopting-flyway-on-an-existing-database-one-time)) **before** the first `up` that includes the `flyway` service — otherwise Flyway would try to recreate the existing schema and fail.
