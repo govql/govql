@@ -72,6 +72,10 @@ test('advanceLoadCursor: upserts the captured fetch value into the load stage', 
   const { text, params } = client.calls[0];
   assert.match(text, /INSERT INTO source_state/i);
   assert.match(text, /ON CONFLICT/i);
+  // Pin the stage literal: advanceLoadCursor must write the 'load' stage, not
+  // 'fetch'. The stage is hardcoded (not a param), so without this a regression
+  // flipping it to 'fetch' would corrupt the handshake yet pass every other check.
+  assert.match(text, /'load'/);
   assert.deepEqual(params, ['congress-votes', value]);
 });
 

@@ -182,6 +182,16 @@ async function run() {
       }
     }
 
+    // If there were stale congresses but every rebuild failed, the job
+    // accomplished nothing. Fail the run (via the catch below) so its
+    // ingestion_runs row is marked 'failed' and the healthcheck is skipped —
+    // otherwise the dead-man's-switch reports healthy straight through a total
+    // aggregate-build outage. A partial failure (some rebuilt) stays 'success':
+    // the failed congresses remain stale and retry next run.
+    if (stale.length > 0 && rebuilt === 0) {
+      throw new Error(`all ${stale.length} stale congress rebuild(s) failed`);
+    }
+
     await client.query(
       `UPDATE ingestion_runs
        SET finished_at = now(), status = 'success', records_upserted = $1

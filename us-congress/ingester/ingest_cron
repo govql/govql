@@ -1,6 +1,12 @@
 # Job output is sent to PID 1's stdout/stderr (crond -f) so it flows to the
 # container's logs → Vector → Loki, like every other service.
 #
+# Env delivery: this is busybox crond, which passes its own (container)
+# environment to each job, so child processes (node, …) inherit DATABASE_URL
+# directly. The `. /etc/environment` below is redundant belt-and-suspenders. (No
+# pam_env here, unlike the Debian scraper — the mechanism differs but the result
+# is the same: jobs see the container env.)
+#
 # These cron times are a SOFT SCHEDULE, not the correctness gate. Each load stage
 # gates on the scraper's fetch cursor in source_state (the fetch→load handshake)
 # and is a clean no-op when nothing new has been fetched — so exact timing
