@@ -7,6 +7,16 @@ per-package `README.md` files, which this document links to for detail.
 When a new cross-cutting convention is decided, add it here so future sessions
 inherit it.
 
+## Active plan
+
+The project's master plan lives at [`plans/PLAN.md`](plans/PLAN.md) — a durable
+architectural header plus an ordered list of task pointers (task bodies in
+`plans/tasks/`, finished ones in `plans/tasks/done/`). It is kept here, in
+`AGENTS.md` and a generic `plans/` directory rather than a Claude-specific
+`CLAUDE.md`, so the planning workflow stays usable across Claude, Codex, and
+OpenCode. New work is appended by the `to-plan` workflow; it never creates a
+second plan.
+
 ## Repository map
 
 - **`us-congress/`** — US Congress roll-call vote data, served as a GraphQL API
