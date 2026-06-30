@@ -1,7 +1,19 @@
-# Source container environment so HEALTHCHECK_* vars are available.
-# Job output is sent to PID 1's stdout/stderr (cron -f) so it flows to the
-# container's logs → Vector → Loki, like every other service.
+# Cron jobs inherit the container environment (DATABASE_URL, HEALTHCHECK_*, …)
+# automatically: this is Debian/Vixie cron, whose PAM stack runs pam_env, which
+# loads /etc/environment into every job's session (see /etc/pam.d/cron). The
+# Dockerfile CMD populates /etc/environment via `printenv` before starting cron.
+# The explicit `. /etc/environment` below is therefore redundant belt-and-
+# suspenders — it only affects in-shell $VAR expansion, and child scripts like
+# write-fetch-cursor.sh inherit the (exported) pam_env values regardless. (Do not
+# "fix" the absence of a source on the legislators line: pam_env covers it.)
+# Job output goes to PID 1's stdout/stderr (cron -f) → container logs → Vector → Loki.
+#
+# After a successful scrape, advance the source's `fetch` cursor in source_state
+# (write-fetch-cursor.sh) — the producer side of the fetch→load handshake. Both the
+# healthcheck and the cursor write are gated on scrape success (&&), but run
+# independently of each other (`;`) so a transient DB outage failing the cursor
+# write can't suppress the scrape dead-man's-switch ping.
 SHELL=/bin/sh
 
-35 * * * * root . /etc/environment; cd /congress && /usr/local/bin/usc-run votes --force > /proc/1/fd/1 2>/proc/1/fd/2 && [ -n "$HEALTHCHECK_VOTES_SCRAPE_URL" ] && curl -fsS --retry 3 "$HEALTHCHECK_VOTES_SCRAPE_URL" > /dev/null 2>&1; true
+35 * * * * root . /etc/environment; cd /congress && /usr/local/bin/usc-run votes --force > /proc/1/fd/1 2>/proc/1/fd/2 && { [ -n "$HEALTHCHECK_VOTES_SCRAPE_URL" ] && curl -fsS --retry 3 "$HEALTHCHECK_VOTES_SCRAPE_URL" > /dev/null 2>&1; /usr/local/bin/write-fetch-cursor.sh congress-votes > /proc/1/fd/1 2>/proc/1/fd/2; }; true
 0  2 * * * root /usr/local/bin/update-legislators.sh > /proc/1/fd/1 2>/proc/1/fd/2

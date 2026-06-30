@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     cron \
+    postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --upgrade pip setuptools wheel --break-system-packages
@@ -31,6 +32,10 @@ RUN echo "/opt/theunitedstates.io/congress/" \
 
 COPY ./scraper/update-legislators.sh /usr/local/bin/update-legislators.sh
 RUN chmod +x /usr/local/bin/update-legislators.sh
+
+# Advances a source's `fetch` cursor in source_state after a successful scrape.
+COPY ./scraper/write-fetch-cursor.sh /usr/local/bin/write-fetch-cursor.sh
+RUN chmod +x /usr/local/bin/write-fetch-cursor.sh
 
 # Place the crontab in /etc/cron.d/ — system cron reads it from there directly.
 # Do NOT also run `crontab` on it; that would install a duplicate root user

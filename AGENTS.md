@@ -66,3 +66,45 @@ The per-table API docs are generated from the migration files by
 `us-congress/docs/scripts/generate-schema-docs.mjs`. Keep migrations hand-written,
 readable SQL (the generator parses `CREATE TABLE` / `COMMENT ON` statements);
 re-run `npm run generate-schema-docs` after schema changes.
+
+## Timestamps: JavaScript milliseconds vs Postgres microseconds
+
+**This has bitten us more than once — read it before writing any code that reads a
+`TIMESTAMPTZ`, compares it, and writes it back.**
+
+Postgres `TIMESTAMPTZ` (and `now()`) has **microsecond** precision; a JavaScript
+`Date` has only **millisecond** precision. `node-postgres` deserializes a
+`TIMESTAMPTZ` into a `Date`, **silently truncating** the microseconds. So any value
+that round-trips DB → JS `Date` → DB comes back a few microseconds *smaller* than
+the original.
+
+The failure mode is a watermark/cursor that looks **perpetually stale**: you store
+`built_through`/`load.cursor` from a truncated `Date`, then compare it against the
+still-microsecond source value, and `source > stored` is forever true — so the work
+re-runs every cycle and never settles.
+
+Two ways we avoid it, both in the codebase already:
+
+- **Capture the watermark in SQL**, never in JS — e.g. the aggregate rebuild does
+  `INSERT ... SELECT max(updated_at) FROM votes` so `built_through` keeps full
+  precision (see `ingester/src/build-aggregates.js`).
+- **Read the value as text, not a `Date`**, when JS must carry it — the cursor
+  helper reads with `to_char(cursor AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
+  and writes that exact string back, so `load.cursor` equals the consumed `fetch`
+  value to the microsecond (see `ingester/src/cursor-state.js`). Comparisons via
+  `new Date()` still truncate to ms, which is fine — both sides truncate equally —
+  but the **stored** value must stay exact.
+
+## Aggregate rebuild memory
+
+The per-congress aggregate rebuild (`ingester/src/build-aggregates.js`) runs a
+pairwise member self-join that emits ~100M rows. Postgres is capped at 256 MB (1 GB
+host). At the cluster-default `work_mem` (2 MB) the `HashAggregate` mis-estimates
+its group count, spills those rows across ~128 temp partitions, and the temp-file
+**page cache** OOM-kills the container — taking the whole cluster down, not just the
+query. The rebuild therefore wraps its transaction in
+`SET LOCAL work_mem = '32MB'` + `SET LOCAL max_parallel_workers_per_gather = 0` +
+`SET LOCAL jit = off`, which keeps the (genuinely small, ~150k-group) aggregate in
+memory with no spill. Keep these `SET LOCAL`s if you touch that code, and never
+raise `work_mem` cluster-wide to fix it — every connection would then be able to
+blow the cap.

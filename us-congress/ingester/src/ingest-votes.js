@@ -8,6 +8,12 @@
  *   data/{congress}/votes/{session}/{chamber}{number}/data.json
  *   e.g. data/113/votes/2013/h1/data.json
  *
+ * Stage gate: this is the `load` stage of the fetch→load→build pipeline. It
+ * runs only when the scraper's `fetch` cursor in source_state has advanced past
+ * the `load` cursor (see cursor-state.js); otherwise it is a clean no-op. The
+ * cron time is a soft schedule, not the correctness gate. Building the
+ * precomputed aggregates is now a separate stage — see build-aggregates.js.
+ *
  * Skip logic: if the vote already exists in the DB with a source_updated_at
  * >= the file's updated_at, the file is skipped. This keeps hourly runs fast
  * after the initial historical backfill.
@@ -21,8 +27,12 @@ import fs from 'fs';
 import path from 'path';
 import { pool } from './db.js';
 import { logger } from './logger.js';
+import { loadReadiness, advanceLoadCursor } from './cursor-state.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
+
+// Source key for the staged fetch→load cursor handshake in source_state.
+const SOURCE_NAME = 'congress-votes';
 
 // Pass --force to reprocess vote files that are already current in the DB.
 // Useful when the ingestion logic changes (e.g. this lis_id fix).
@@ -271,127 +281,6 @@ async function processVoteFile(client, filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Congresses whose vote_similarity rows are stale: their max(votes.updated_at)
-// is newer than the watermark from their last successful rebuild (or they have
-// never been built). votes.updated_at is a reliable signal — upsertVote runs in
-// the same transaction as replacePositions and the trg_votes_updated_at trigger
-// bumps it on every change, so any position change moves the parent vote's
-// updated_at. Cheap: votes is small and congress is indexed.
-//
-// Returns an array of congress numbers. The watermark itself is captured inside
-// rebuildAggregatesForCongress (from the same MVCC snapshot it builds from), not
-// here — so it keeps full microsecond precision rather than being truncated by a
-// round-trip through a JS Date (which only holds milliseconds, and made every
-// congress look perpetually stale).
-// ---------------------------------------------------------------------------
-async function staleCongresses(client) {
-  const { rows } = await client.query(
-    `SELECT v.congress AS congress
-     FROM votes v
-     LEFT JOIN vote_similarity_state s ON s.congress = v.congress
-     GROUP BY v.congress, s.built_through
-     HAVING s.built_through IS NULL OR max(v.updated_at) > s.built_through
-     ORDER BY v.congress`,
-  );
-  return rows.map((r) => r.congress);
-}
-
-// ---------------------------------------------------------------------------
-// Rebuild the per-congress precomputed aggregates (vote_similarity and
-// member_party_agreement) for a single congress, and advance its watermark —
-// all in one transaction.
-//
-// Each table's rows for the congress are DELETE+INSERTed and the watermark is
-// UPSERTed inside one transaction, so concurrent readers see the old rows until
-// the new ones commit atomically (never an empty slice), and the watermark can
-// only advance if the whole rebuild committed. Each build is scoped to one
-// congress via a CTE prefilter so cost is independent of how much historical
-// data exists. Only Yea/Nay positions count (Present / Not Voting / VP ignored).
-//
-// The transaction runs at REPEATABLE READ so both builds and the watermark
-// capture (max(votes.updated_at), computed in SQL) read one consistent snapshot:
-// built_through reflects exactly the data that was built, and any vote changed
-// after that snapshot stays ahead of the watermark and is rebuilt next run.
-// Capturing the watermark in SQL (rather than passing a JS value in) keeps its
-// full microsecond precision — a JS Date truncates to milliseconds, which made
-// max(updated_at) > built_through perpetually true.
-// ---------------------------------------------------------------------------
-async function rebuildAggregatesForCongress(client, congress) {
-  await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-  try {
-    // Pairwise member-to-member agreement.
-    await client.query('DELETE FROM vote_similarity WHERE congress = $1', [
-      congress,
-    ]);
-    await client.query(
-      `INSERT INTO vote_similarity
-         (congress, chamber, member_a, member_b, shared_votes, agreed)
-       WITH cpos AS (
-         SELECT vp.vote_id, vp.bioguide_id, vp.position, v.congress, v.chamber
-         FROM vote_positions vp
-         JOIN votes v ON v.vote_id = vp.vote_id
-         WHERE v.congress = $1 AND vp.position IN ('Yea', 'Nay')
-       )
-       SELECT a.congress, a.chamber, a.bioguide_id, b.bioguide_id,
-              count(*)::int,
-              count(*) FILTER (WHERE a.position = b.position)::int
-       FROM cpos a
-       JOIN cpos b ON b.vote_id = a.vote_id AND a.bioguide_id < b.bioguide_id
-       GROUP BY a.congress, a.chamber, a.bioguide_id, b.bioguide_id`,
-      [congress],
-    );
-
-    // Member-vs-party agreement: each member compared to every party's
-    // strict-majority position per vote (incl. their own party = loyalty).
-    await client.query(
-      'DELETE FROM member_party_agreement WHERE congress = $1',
-      [congress],
-    );
-    await client.query(
-      `INSERT INTO member_party_agreement
-         (congress, chamber, bioguide_id, member_party, other_party, shared_votes, agreed)
-       WITH pos AS (
-         SELECT vp.vote_id, vp.bioguide_id, vp.position, vp.party, v.chamber
-         FROM vote_positions vp
-         JOIN votes v ON v.vote_id = vp.vote_id
-         WHERE v.congress = $1 AND vp.position IN ('Yea', 'Nay')
-       ),
-       party_majority AS (
-         SELECT vote_id, party AS other_party,
-                CASE
-                  WHEN count(*) FILTER (WHERE position = 'Yea')
-                     > count(*) FILTER (WHERE position = 'Nay') THEN 'Yea'
-                  WHEN count(*) FILTER (WHERE position = 'Nay')
-                     > count(*) FILTER (WHERE position = 'Yea') THEN 'Nay'
-                  ELSE NULL
-                END AS majority_position
-         FROM pos
-         GROUP BY vote_id, party
-       )
-       SELECT $1, p.chamber, p.bioguide_id, p.party, pm.other_party,
-              count(*)::int,
-              count(*) FILTER (WHERE p.position = pm.majority_position)::int
-       FROM pos p
-       JOIN party_majority pm
-         ON pm.vote_id = p.vote_id AND pm.majority_position IS NOT NULL
-       GROUP BY p.chamber, p.bioguide_id, p.party, pm.other_party`,
-      [congress],
-    );
-
-    await client.query(
-      `INSERT INTO vote_similarity_state (congress, built_through)
-       SELECT $1, max(updated_at) FROM votes WHERE congress = $1
-       ON CONFLICT (congress) DO UPDATE SET built_through = EXCLUDED.built_through`,
-      [congress],
-    );
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function run() {
@@ -399,6 +288,21 @@ async function run() {
   let runId;
 
   try {
+    // Readiness gate: run only when the scraper's fetch cursor has advanced past
+    // what we last loaded. Capture the fetch value now and advance load to exactly
+    // it on success, so the handshake — not the cron clock — is the correctness
+    // gate. A not-ready run is a clean, logged no-op (exit 0) that writes no
+    // ingestion_runs row and pings no healthcheck.
+    const { fetchCursor, loadCursor, ready } = await loadReadiness(client, SOURCE_NAME);
+    if (!ready) {
+      logger.info(
+        `Votes ingestion skipped — fetch cursor ` +
+        `(${fetchCursor ?? 'none'}) has not advanced past load cursor ` +
+        `(${loadCursor ?? 'none'}); nothing new to load`,
+      );
+      return;
+    }
+
     const { rows } = await client.query(
       `INSERT INTO ingestion_runs (run_type, status)
        VALUES ('votes', 'running')
@@ -417,43 +321,30 @@ async function run() {
       else                            totalFailed++;
     }
 
-    await client.query(
-      `UPDATE ingestion_runs
-       SET finished_at = now(), status = 'success', records_upserted = $1
-       WHERE id = $2`,
-      [totalIngested, runId],
-    );
+    // Advance the load cursor to the captured fetch value and mark the run
+    // successful atomically, in one transaction — so the cursor and the run's
+    // status can never disagree. (A crash mid-walk never reaches here; a failure
+    // inside this block rolls back both, leaving the cursor unadvanced so the next
+    // run re-checks readiness and re-walks idempotently.)
+    await client.query('BEGIN');
+    try {
+      await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
+      await client.query(
+        `UPDATE ingestion_runs
+         SET finished_at = now(), status = 'success', records_upserted = $1
+         WHERE id = $2`,
+        [totalIngested, runId],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    }
 
     logger.info(
       `Votes ingestion complete — ingested: ${totalIngested}, ` +
       `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
     );
-
-    // Rebuild the per-congress precomputed aggregates (vote_similarity and
-    // member_party_agreement) for every congress whose vote data has changed
-    // since its last successful rebuild (see staleCongresses). This is driven by
-    // actual staleness, not by what was ingested this run, so a rebuild that
-    // failed or was interrupted on a previous run is retried automatically — its
-    // watermark was never advanced. On a fresh DB every congress is stale (full
-    // backfill); steady state, only the current congress is stale. Each rebuild
-    // is its own transaction: failures are logged but non-fatal (the ingestion
-    // is already committed and the run marked 'success'), and the congress simply
-    // remains stale for the next run.
-    const stale = await staleCongresses(client);
-    for (const congress of stale) {
-      try {
-        const t0 = Date.now();
-        await rebuildAggregatesForCongress(client, congress);
-        logger.info(
-          `Rebuilt aggregates for congress ${congress} in ${Date.now() - t0} ms`,
-        );
-      } catch (err) {
-        logger.error(
-          `aggregate rebuild for congress ${congress} failed ` +
-          `(votes are ingested; aggregates are stale, will retry next run): ${err.message}`,
-        );
-      }
-    }
 
     if (process.env.HEALTHCHECK_VOTES_INGEST_URL) {
       await fetch(process.env.HEALTHCHECK_VOTES_INGEST_URL).catch(() => {});
