@@ -1,6 +1,6 @@
 # Task 0001: source_state cursor, fetch→load readiness, decoupled build stage
 
-**Branch**: `feature/source-state-cursor-decoupled-stages`
+**Branch**: `56-source-state-cursor-decoupled-stages`
 **Depends on**: none
 **Source**: GitHub issue #56 (steps 1+2) · talk-it-through 2026-06-30 · **User stories**: as the data platform, I want each ingestion stage to gate on an explicit upstream cursor instead of a wall-clock buffer, and to run aggregates as their own job, so adding sources doesn't depend on cron timing luck.
 **PR**: reference #56 (`Part of #56`); do **not** close it — it's a tracking issue spanning steps 1–5.

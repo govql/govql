@@ -1,6 +1,6 @@
 # Task 0002: Pipeline DAG manifest, generator + drift validator
 
-**Branch**: `feature/pipeline-dag-manifest`
+**Branch**: `56-pipeline-dag-manifest`
 **Depends on**: 0001
 **Source**: GitHub issue #56 · talk-it-through 2026-06-30 · **User stories**: as a maintainer adding new sources/aggregations, I want the implicit cron+cursor DAG to be a generated, validated artifact, so the pipeline stays understandable and the docs can't silently drift from what actually runs.
 **PR**: reference #56 (`Part of #56`); do **not** close it — it's a tracking issue spanning steps 1–5.
