@@ -25,48 +25,75 @@ async function gql<T>(
   return json.data as T;
 }
 
-// Step 1: fetch all vote IDs for a congress + chamber
-const VOTE_IDS_QUERY = `
-  query VoteIds($congress: Int!, $chamber: String!) {
+// Edges: precomputed pairwise agreement for a congress + chamber, paginated. Only pairs
+// with enough shared votes are fetched server-side; the agreement ratio is thresholded
+// client-side (vote_similarity has no agreement_rate column).
+const SIMILARITY_QUERY = `
+  query Sim($congress: Int!, $chamber: String!, $after: Cursor) {
+    allVoteSimilarities(
+      filter: {
+        congress: { equalTo: $congress }
+        chamber: { equalTo: $chamber }
+        sharedVotes: { greaterThanOrEqualTo: 15 }
+      }
+      first: 10000
+      after: $after
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes { memberA memberB sharedVotes agreed }
+    }
+  }
+`;
+
+// Per-member party + name for the congress + chamber. One row per (member, other party);
+// member_party is constant across a member's rows, so we keep the first per member.
+const MEMBER_PARTY_QUERY = `
+  query MemberParty($congress: Int!, $chamber: String!) {
+    allMemberPartyAgreements(
+      filter: {
+        congress: { equalTo: $congress }
+        chamber: { equalTo: $chamber }
+      }
+      first: 10000
+    ) {
+      nodes {
+        bioguideId
+        memberParty
+        legislatorByBioguideId { firstName lastName }
+      }
+    }
+  }
+`;
+
+// State (tooltip only): sample a few votes; their positions carry each member's state at
+// vote time. A handful of votes covers essentially everyone who voted that congress.
+const STATE_SAMPLE_QUERY = `
+  query StateSample($congress: Int!, $chamber: String!) {
     allVotes(
       filter: {
-        chamber: { equalTo: $chamber }
         congress: { equalTo: $congress }
+        chamber: { equalTo: $chamber }
       }
-      first: 2000
-    ) {
-      nodes { voteId }
-    }
-  }
-`;
-
-// Step 2: fetch positions for a batch of vote IDs (flat, no nesting)
-const POSITIONS_QUERY = `
-  query Positions($ids: [String!]!) {
-    allVotePositions(
-      filter: { voteId: { in: $ids } }
-      first: 30000
+      first: 8
     ) {
       nodes {
-        bioguideId
-        voteId
-        position
-        party
-        state
+        votePositionsByVoteIdList { bioguideId state }
       }
     }
   }
 `;
 
-// Step 3: fetch legislator names by bioguide ID
-const LEGISLATORS_QUERY = `
-  query LegislatorNames($ids: [String!]!) {
-    allLegislators(filter: { bioguideId: { in: $ids } }) {
-      nodes {
-        bioguideId
-        firstName
-        lastName
+// Per-member vote count (node size): sum of Yea/Nay positions across categories that congress.
+const VOTE_COUNT_QUERY = `
+  query VoteCounts($congress: Int!) {
+    allMemberVotingSummaries(
+      filter: {
+        congress: { equalTo: $congress }
+        position: { in: ["Yea", "Nay"] }
       }
+      first: 20000
+    ) {
+      nodes { bioguideId positions }
     }
   }
 `;
@@ -83,18 +110,34 @@ interface CongressNode {
   congress: number;
 }
 
-interface FlatPosition {
-  voteId: string;
+interface SimRow {
+  memberA: string;
+  memberB: string;
+  sharedVotes: number;
+  agreed: number;
+}
+
+interface MemberPartyRow {
   bioguideId: string;
-  position: string;
-  party: string | null;
+  memberParty: string | null;
+  legislatorByBioguideId: { firstName: string; lastName: string } | null;
+}
+
+interface StatePosition {
+  bioguideId: string;
   state: string | null;
 }
 
-interface LegislatorName {
+interface VoteCountRow {
   bioguideId: string;
-  firstName: string;
-  lastName: string;
+  positions: number;
+}
+
+interface SimPage {
+  allVoteSimilarities: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: SimRow[];
+  };
 }
 
 interface GraphNode extends d3.SimulationNodeDatum {
@@ -110,108 +153,74 @@ interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
   sharedVotes: number;
 }
 
-const BATCH_SIZE = 50;
-const BATCH_CONCURRENCY = 6;
 const MIN_AGREEMENT = 0.5;
 const MIN_SHARED_VOTES = 15;
 
-async function fetchAllPositions(
-  voteIds: string[],
-  onProgress: (done: number, total: number) => void
-): Promise<FlatPosition[]> {
-  const batches: string[][] = [];
-  for (let i = 0; i < voteIds.length; i += BATCH_SIZE) {
-    batches.push(voteIds.slice(i, i + BATCH_SIZE));
+// Fetch every precomputed similarity pair for the congress + chamber, paging through the
+// connection. Large pages keep the request count low (well under the per-IP rate limit).
+async function fetchAllSimilarities(
+  congress: number,
+  chamber: string,
+  onProgress: (pages: number) => void
+): Promise<SimRow[]> {
+  const rows: SimRow[] = [];
+  let after: string | null = null;
+  let pages = 0;
+
+  for (;;) {
+    const data: SimPage = await gql<SimPage>(SIMILARITY_QUERY, {
+      congress,
+      chamber,
+      after,
+    });
+
+    rows.push(...data.allVoteSimilarities.nodes);
+    pages += 1;
+    onProgress(pages);
+
+    const { hasNextPage, endCursor } = data.allVoteSimilarities.pageInfo;
+    if (!hasNextPage || !endCursor) break;
+    after = endCursor;
   }
 
-  const results: FlatPosition[] = [];
-  let completed = 0;
-
-  for (let i = 0; i < batches.length; i += BATCH_CONCURRENCY) {
-    const chunk = batches.slice(i, i + BATCH_CONCURRENCY);
-    const chunkResults = await Promise.all(
-      chunk.map((ids) =>
-        gql<{ allVotePositions: { nodes: FlatPosition[] } }>(
-          POSITIONS_QUERY,
-          { ids }
-        ).then((d) => d.allVotePositions.nodes)
-      )
-    );
-    for (const r of chunkResults) results.push(...r);
-    completed += chunk.length;
-    onProgress(completed, batches.length);
-  }
-
-  return results;
+  return rows;
 }
 
 function buildGraph(
-  positions: FlatPosition[],
-  nameMap: Map<string, string>
+  simRows: SimRow[],
+  partyNameMap: Map<string, { party: string; name: string }>,
+  stateMap: Map<string, string>,
+  voteCountMap: Map<string, number>
 ): { nodes: GraphNode[]; links: GraphLink[] } {
-  const memberVotes = new Map<string, Map<string, string>>();
-  const memberInfo = new Map<
-    string,
-    { name: string; party: string; state: string }
-  >();
+  // Nodes: every member in the congress/chamber (from member_party_agreement) — matches
+  // the old behavior where every voting member is a node, even isolated ones.
+  const nodes: GraphNode[] = Array.from(partyNameMap.entries()).map(
+    ([id, info]) => ({
+      id,
+      name: info.name,
+      party: info.party,
+      state: stateMap.get(id) ?? '',
+      voteCount: voteCountMap.get(id) ?? 0,
+    })
+  );
+  const nodeIds = new Set(nodes.map((n) => n.id));
 
-  for (const pos of positions) {
-    if (!pos.bioguideId) continue;
-    const { position } = pos;
-    if (
-      position === 'VP' ||
-      position === 'Not Voting' ||
-      position === 'Present'
-    )
-      continue;
-
-    if (!memberVotes.has(pos.bioguideId)) {
-      memberVotes.set(pos.bioguideId, new Map());
-      memberInfo.set(pos.bioguideId, {
-        name: nameMap.get(pos.bioguideId) ?? pos.bioguideId,
-        party: pos.party ?? 'Unknown',
-        state: pos.state ?? '',
-      });
-    }
-    memberVotes.get(pos.bioguideId)!.set(pos.voteId, position);
-  }
-
-  const members = Array.from(memberVotes.keys());
-
+  // Links: precomputed pairs. shared_votes >= MIN_SHARED_VOTES is enforced server-side; the
+  // agreement ratio (agreed / shared_votes) is thresholded here. Skip any pair whose
+  // endpoints aren't in the node set — d3.forceLink throws on a link to an unknown node.
   const links: GraphLink[] = [];
-  for (let i = 0; i < members.length; i++) {
-    for (let j = i + 1; j < members.length; j++) {
-      const aVotes = memberVotes.get(members[i])!;
-      const bVotes = memberVotes.get(members[j])!;
-      let same = 0;
-      let total = 0;
-      for (const [voteId, posA] of aVotes) {
-        if (bVotes.has(voteId)) {
-          total++;
-          if (bVotes.get(voteId) === posA) same++;
-        }
-      }
-      if (total >= MIN_SHARED_VOTES) {
-        const agreement = same / total;
-        if (agreement >= MIN_AGREEMENT) {
-          links.push({
-            source: members[i],
-            target: members[j],
-            agreement,
-            sharedVotes: total,
-          });
-        }
-      }
-    }
+  for (const row of simRows) {
+    if (row.sharedVotes < MIN_SHARED_VOTES) continue;
+    const agreement = row.agreed / row.sharedVotes;
+    if (agreement < MIN_AGREEMENT) continue;
+    if (!nodeIds.has(row.memberA) || !nodeIds.has(row.memberB)) continue;
+    links.push({
+      source: row.memberA,
+      target: row.memberB,
+      agreement,
+      sharedVotes: row.sharedVotes,
+    });
   }
-
-  const nodes: GraphNode[] = members.map((id) => ({
-    id,
-    name: memberInfo.get(id)!.name,
-    party: memberInfo.get(id)!.party,
-    state: memberInfo.get(id)!.state,
-    voteCount: memberVotes.get(id)!.size,
-  }));
 
   return { nodes, links };
 }
@@ -546,38 +555,63 @@ export default function VotingSimilarityGraph(): ReactNode {
 
     (async () => {
       try {
-        // Step 1: get all vote IDs for this congress + chamber
-        const voteData = await gql<{ allVotes: { nodes: { voteId: string }[] } }>(
-          VOTE_IDS_QUERY,
-          { congress: selectedCongress, chamber: selectedChamber }
-        );
+        if (selectedCongress === null) return; // narrow for TS; outer guard already returned
+        const congress = selectedCongress;
+        const chamber = selectedChamber;
+
+        // Four small, independent fetches in parallel: edges (paged), party+name, state
+        // sample, and vote counts. The edge fetch dominates; the rest overlap it.
+        const [simRows, memberPartyData, stateData, voteCountData] =
+          await Promise.all([
+            fetchAllSimilarities(congress, chamber, (pages) => {
+              if (!cancelled) setProgress({ done: pages, total: 0 });
+            }),
+            gql<{ allMemberPartyAgreements: { nodes: MemberPartyRow[] } }>(
+              MEMBER_PARTY_QUERY,
+              { congress, chamber }
+            ),
+            gql<{
+              allVotes: { nodes: { votePositionsByVoteIdList: StatePosition[] }[] };
+            }>(STATE_SAMPLE_QUERY, { congress, chamber }),
+            gql<{ allMemberVotingSummaries: { nodes: VoteCountRow[] } }>(
+              VOTE_COUNT_QUERY,
+              { congress }
+            ),
+          ]);
         if (cancelled) return;
 
-        const voteIds = voteData.allVotes.nodes.map((n) => n.voteId);
+        // Party + name, one entry per member (first row wins; party-switchers are rare).
+        const partyNameMap = new Map<string, { party: string; name: string }>();
+        for (const row of memberPartyData.allMemberPartyAgreements.nodes) {
+          if (!row.bioguideId || partyNameMap.has(row.bioguideId)) continue;
+          const leg = row.legislatorByBioguideId;
+          partyNameMap.set(row.bioguideId, {
+            party: row.memberParty ?? 'Unknown',
+            name: leg ? `${leg.firstName} ${leg.lastName}` : row.bioguideId,
+          });
+        }
 
-        // Step 2: fetch positions in parallel batches
-        const positions = await fetchAllPositions(voteIds, (done, total) => {
-          if (!cancelled) setProgress({ done, total });
-        });
-        if (cancelled) return;
+        // State at vote time, from the sampled votes' positions.
+        const stateMap = new Map<string, string>();
+        for (const vote of stateData.allVotes.nodes) {
+          for (const pos of vote.votePositionsByVoteIdList ?? []) {
+            if (pos.bioguideId && pos.state && !stateMap.has(pos.bioguideId)) {
+              stateMap.set(pos.bioguideId, pos.state);
+            }
+          }
+        }
 
-        // Step 3: fetch legislator names for the members we found
-        const ids = Array.from(
-          new Set(positions.map((p) => p.bioguideId).filter(Boolean))
-        );
-        const namesData = await gql<{
-          allLegislators: { nodes: LegislatorName[] };
-        }>(LEGISLATORS_QUERY, { ids });
-        if (cancelled) return;
+        // Vote count = sum of Yea/Nay positions across categories.
+        const voteCountMap = new Map<string, number>();
+        for (const row of voteCountData.allMemberVotingSummaries.nodes) {
+          if (!row.bioguideId) continue;
+          voteCountMap.set(
+            row.bioguideId,
+            (voteCountMap.get(row.bioguideId) ?? 0) + (row.positions ?? 0)
+          );
+        }
 
-        const nameMap = new Map(
-          namesData.allLegislators.nodes.map((l) => [
-            l.bioguideId,
-            `${l.firstName} ${l.lastName}`,
-          ])
-        );
-
-        setGraphData(buildGraph(positions, nameMap));
+        setGraphData(buildGraph(simRows, partyNameMap, stateMap, voteCountMap));
         setDataLoading(false);
         setProgress(null);
       } catch (err) {
@@ -670,8 +704,8 @@ export default function VotingSimilarityGraph(): ReactNode {
 
       {dataLoading && (
         <p style={{ color: 'var(--ifm-color-emphasis-600)' }}>
-          {progress
-            ? `Fetching votes: ${progress.done} of ${progress.total} batches…`
+          {progress && progress.done > 0
+            ? `Loading pairings… (page ${progress.done})`
             : 'Loading…'}
         </p>
       )}
