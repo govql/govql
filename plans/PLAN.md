@@ -71,5 +71,5 @@ Durable decisions that apply across all tasks:
 
 ## Tasks
 
-- [>] 0001 · source_state cursor, fetch→load readiness, decoupled build stage → tasks/0001-source-state-cursor-decoupled-stages.md
+- [x] 0001 · source_state cursor, fetch→load readiness, decoupled build stage → tasks/done/0001-source-state-cursor-decoupled-stages.md
 - [ ] 0002 · Pipeline DAG manifest, generator + drift validator (after 0001) → tasks/0002-pipeline-dag-manifest.md
