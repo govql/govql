@@ -17,6 +17,7 @@ Ask an agent questions like:
 - *"Which legislators in the 118th Congress switched parties during their service?"*
 - *"Compare Senator Sanders' voting record to Senator Murkowski's on cloture votes
    in the most recent Congress."*
+- *"Which Democrats most often voted with Republicans in the current Congress?"*
 
 The agent picks the right tool, writes the GraphQL query against the live
 schema, and parses the response — no manual API wrangling.
@@ -101,7 +102,7 @@ Vote data refreshes hourly; legislator data refreshes daily.
 
 ## Status
 
-Version 0.1.0 ships three foundational tools: a GraphQL passthrough
+As of 0.1.1, the server provides three foundational tools: a GraphQL passthrough
 (`execute_graphql`) and two narrow schema-discovery tools (`list_types`,
 `describe_type`). Curated higher-level tools (`find_legislator`,
 `get_voting_record`, `compare_voters`, etc.) are planned for subsequent
