@@ -4,6 +4,18 @@ All notable changes to `govql-mcp-server` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] — 2026-07-03
+
+### Changed
+
+- `execute_graphql` now points agents at the precomputed derived analytics
+  views (`VoteSimilarity`, `MemberPartyAgreement`, and the per-vote /
+  per-member tally views) so analytical questions use them directly instead of
+  aggregating raw `VotePosition` rows. Also nudges agents to run `list_types()`
+  before hand-rolling any multi-row computation, and calls out the derived
+  views in the `list_types` tip. Documentation only — no change to the tool
+  surface.
+
 ## [0.1.0] — 2026-05-28
 
 Initial release.

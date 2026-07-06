@@ -46,7 +46,10 @@ async def list_types(
     Tip: most agents start with `list_types(kind="OBJECT")` to see just the
     queryable entities (Vote, Legislator, Bill, Committee, …), then call
     `describe_type("Query")` to see the available top-level query fields
-    (such as `allVotes`, `allLegislators`, `voteByVoteId`).
+    (such as `allVotes`, `allLegislators`, `voteByVoteId`). The OBJECT list
+    also includes GovQL's **derived analytics views** (e.g. `VoteSimilarity`,
+    `MemberPartyAgreement`) — precomputed answers to common cross-cutting
+    questions, worth preferring over aggregating raw positions yourself.
 
     Returns `{"data": {"types": [{"kind": ..., "name": ..., "description": ...}, ...]}}`
     on success, or `{"data": null, "errors": [...]}` on network failure.
