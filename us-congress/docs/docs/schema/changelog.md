@@ -37,6 +37,14 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## 2026-06-29
+
+### Security
+
+- Hardened the service against automated abuse and probing. (#36)
+
+## [2026-06-25]
+
 ### Added
 
 - **Member-vs-party voting agreement** via the `member_party_agreement` type: for each congress
@@ -46,7 +54,7 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
   measure). Maintained incrementally by the ingester across all congresses. (#49)
 
 
-## [2026-06-17] — Baseline
+## [2026-06-18] — Baseline
 
 First published changelog. Establishes the current public API as the starting point and records
 recent consumer-facing additions.
