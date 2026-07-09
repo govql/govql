@@ -37,6 +37,14 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+### Added
+
+- **Legislator relations on `vote_similarity`**: `member_a` and `member_b` now have foreign keys to
+  `legislators`, so the API exposes `legislatorByMemberA` / `legislatorByMemberB` — each pair returns
+  the two members' names and other legislator details inline instead of bare bioguide IDs. The reverse
+  connections `voteSimilaritiesByMemberA` / `voteSimilaritiesByMemberB` are available on `Legislator`.
+  (A member's party is per-congress — see `member_party_agreement`, not `legislators`.) (#63)
+
 ## 2026-06-29
 
 ### Security
