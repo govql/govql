@@ -75,8 +75,10 @@ is `uvx govql-mcp-server` with no required arguments.
 | `execute_graphql` | Run any GraphQL query against the GovQL endpoint. Returns the result plus an `last_ingest` timestamp so the agent can reason about data freshness. |
 | `list_types` | Returns the names and kinds of every type in the GovQL schema. Optional `kind` filter (`"OBJECT"`, `"INPUT_OBJECT"`, `"ENUM"`, etc.) to narrow further. Start here when you don't know what's queryable. |
 | `describe_type` | Returns one type's full details — fields, arg signatures, input fields, enum values. Call after `list_types` to learn the shape of a specific type before writing a query. |
-| `find_legislator` | Find members by name, party, state, chamber, or **district** when you don't know a bioguide id. Party/state/chamber/district match the member's terms (district is House-only); `current_only` (default) restricts to sitting members. Returns a compact list — each member's `bioguideId` plus current party/state/chamber/district. |
+| `find_legislator` | Find members by name, party, state, chamber, or district when you don't know a bioguide id. Party/state/chamber/district match the member's terms (district is House-only); `current_only` (default) restricts to sitting members. Returns a compact list — each member's `bioguideId` plus current party/state/chamber/district. |
 | `find_vote` | Browse roll-call votes by category, chamber, or congress (newest first), or keyword-search the vote `question`. `topic` matches the question text (which includes bill short titles) — not a full subject index, so it misses procedural votes, and bill subjects aren't populated yet. Returns a compact list with each `voteId`. |
+| `get_legislator` | Full detail for one member by bioguide id: names, bio, and complete term history (party/state/chamber/district over time) with a `current` block. |
+| `get_vote_with_positions` | One vote by id with tallies and per-party breakdown; optionally the individual member positions (filter by party/state/position). |
 
 ## Configuration
 
@@ -105,11 +107,11 @@ Vote data refreshes hourly; legislator data refreshes daily.
 
 ## Status
 
-As of 0.2.0, the server provides the three foundational tools (`execute_graphql`,
-`list_types`, `describe_type`) plus the first curated **discovery** tools,
-`find_legislator` and `find_vote`. Further curated tools (per-entity detail and
-analysis — `get_legislator`, `get_voting_record`, `compare_voters`, …) are
-planned for subsequent releases — see
+As of 0.3.0, the server provides the three foundational tools (`execute_graphql`,
+`list_types`, `describe_type`) plus the curated **discovery** tools
+(`find_legislator`, `find_vote`) and **per-entity detail** tools
+(`get_legislator`, `get_vote_with_positions`). Further curated tools (analysis —
+`get_voting_record`, `compare_voters`, …) are planned for subsequent releases — see
 [design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md).
 
 ## Links

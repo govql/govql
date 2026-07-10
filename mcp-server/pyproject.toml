@@ -1,6 +1,6 @@
 [project]
 name = "govql-mcp-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server for GovQL — query US Congressional data via GraphQL from any MCP client."
 readme = "README.md"
 license = "MIT"
