@@ -74,6 +74,8 @@ is `uvx govql-mcp-server` with no required arguments.
 | `execute_graphql` | Run any GraphQL query against the GovQL endpoint. Returns the result plus an `last_ingest` timestamp so the agent can reason about data freshness. |
 | `list_types` | Returns the names and kinds of every type in the GovQL schema. Optional `kind` filter (`"OBJECT"`, `"INPUT_OBJECT"`, `"ENUM"`, etc.) to narrow further. Start here when you don't know what's queryable. |
 | `describe_type` | Returns one type's full details — fields, arg signatures, input fields, enum values. Call after `list_types` to learn the shape of a specific type before writing a query. |
+| `find_legislator` | Find members by name, party, state, or chamber when you don't know a bioguide id. Party/state/chamber match the member's terms; `current_only` (default) restricts to sitting members. Returns a compact ranked list. |
+| `find_vote` | Search roll-call votes by topic (free-text over the question), chamber, congress, or category. Newest first. Returns a compact list with each `voteId`. |
 
 ## Configuration
 
@@ -102,13 +104,12 @@ Vote data refreshes hourly; legislator data refreshes daily.
 
 ## Status
 
-As of 0.1.1, the server provides three foundational tools: a GraphQL passthrough
-(`execute_graphql`) and two narrow schema-discovery tools (`list_types`,
-`describe_type`). Curated higher-level tools (`find_legislator`,
-`get_voting_record`, `compare_voters`, etc.) are planned for subsequent
-releases — see
-[design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md)
-for the roadmap.
+As of 0.2.0, the server provides the three foundational tools (`execute_graphql`,
+`list_types`, `describe_type`) plus the first curated **discovery** tools,
+`find_legislator` and `find_vote`. Further curated tools (per-entity detail and
+analysis — `get_legislator`, `get_voting_record`, `compare_voters`, …) are
+planned for subsequent releases — see
+[design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md).
 
 ## Links
 
