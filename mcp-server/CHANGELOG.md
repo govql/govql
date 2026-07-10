@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   question), `chamber`, `congress`, and `category`, newest first, with a `limit`.
 - Curated tools cap result size two ways: a `limit` (default 20, max 500) and a
   response-byte guard that truncates oversized payloads and flags `truncated`.
+  Discovery results also report `total_matches` — how many rows match the filter
+  overall — so callers know when to refine or raise `limit`.
 
 ## [0.1.1] — 2026-07-03
 

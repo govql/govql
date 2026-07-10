@@ -23,6 +23,7 @@ from ._curated_shared import (
 _QUERY = """
 query FindLegislator($filter: LegislatorFilter, $first: Int) {
   allLegislators(filter: $filter, first: $first) {
+    totalCount
     nodes {
       bioguideId
       firstName
@@ -89,6 +90,14 @@ async def find_legislator(
     per-term, not on the legislator). `current_only` (default) restricts to
     members whose latest term ends in the future. Returns a compact ranked
     list — pass a returned `bioguideId` to `get_legislator` for full detail.
+
+    Each result displays the member's *latest* term (party/state/chamber).
+    With `current_only=False` the term that matched a historical search may
+    differ from the one displayed (e.g. a member who changed party or seat) —
+    use `get_legislator` for the full term history. `total_matches` is how many
+    members match the filter overall (it can exceed the number returned — raise
+    `limit` or refine the filter to see more); `truncated` is true if the
+    response-size guard trimmed the returned list.
     """
     try:
         term_facets: dict[str, Any] = {}
@@ -124,8 +133,9 @@ async def find_legislator(
     if result.get("errors"):
         return {"data": None, "errors": result["errors"]}
 
-    nodes = result["data"]["allLegislators"]["nodes"]
-    shaped = [_shape(n) for n in nodes]
+    connection = result["data"]["allLegislators"]
+    shaped = [_shape(n) for n in connection["nodes"]]
     items, truncated = guard_items(shaped)
-    return {"data": {"legislators": items, "result_count": len(shaped),
+    return {"data": {"legislators": items,
+                     "total_matches": connection.get("totalCount"),
                      "truncated": truncated}}

@@ -17,9 +17,12 @@ from ._curated_shared import (
     normalize_chamber_code,
 )
 
+_CHAMBER_DISPLAY = {"s": "Senate", "h": "House"}
+
 _QUERY = """
 query FindVote($filter: VoteFilter, $first: Int) {
   allVotes(filter: $filter, orderBy: VOTED_AT_DESC, first: $first) {
+    totalCount
     nodes {
       voteId
       chamber
@@ -63,6 +66,10 @@ async def find_vote(
     Searches the vote `question` text for `topic`; results are newest-first.
     Returns a compact list — pass a returned `voteId` to
     `get_vote_with_positions` for tallies and member positions.
+
+    `total_matches` is how many votes match the filter overall (it can exceed
+    the number returned — raise `limit` or refine the filter to see more).
+    `truncated` is true if the response-size guard trimmed the returned list.
     """
     try:
         chamber_code = normalize_chamber_code(chamber)
@@ -89,7 +96,11 @@ async def find_vote(
     if result.get("errors"):
         return {"data": None, "errors": result["errors"]}
 
-    nodes = result["data"]["allVotes"]["nodes"]
-    items, truncated = guard_items(nodes)
-    return {"data": {"votes": items, "result_count": len(nodes),
+    connection = result["data"]["allVotes"]
+    shaped = [
+        {**n, "chamber": _CHAMBER_DISPLAY.get(n.get("chamber"), n.get("chamber"))}
+        for n in connection["nodes"]
+    ]
+    items, truncated = guard_items(shaped)
+    return {"data": {"votes": items, "total_matches": connection.get("totalCount"),
                      "truncated": truncated}}

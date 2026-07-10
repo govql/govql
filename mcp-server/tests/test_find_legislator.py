@@ -16,6 +16,7 @@ def _last_variables(route) -> dict:
 
 _TWO_SENATORS = {
     "allLegislators": {
+        "totalCount": 2,
         "nodes": [
             {
                 "bioguideId": "P000145", "firstName": "Alejandro",
@@ -54,7 +55,7 @@ async def test_builds_normalized_nested_term_filter(client, mock_graphql, govql_
     assert some["termType"]["equalTo"] == "sen"
     assert "greaterThan" in some["endDate"]          # current_only default
     payload = tool_payload(result)
-    assert payload["data"]["result_count"] == 2
+    assert payload["data"]["total_matches"] == 2
     first = payload["data"]["legislators"][0]
     assert first["bioguideId"] == "P000145"
     assert first["chamber"] == "Senate"
@@ -96,3 +97,13 @@ async def test_network_failure_returns_errors_payload(client, mock_graphql, govq
     payload = tool_payload(result)
     assert "Failed to reach GovQL endpoint" in payload["errors"][0]["message"]
     assert result.is_error is False
+
+
+async def test_limit_is_clamped_to_max(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data={"allLegislators": {"nodes": []}})
+    )
+
+    await client.call_tool("find_legislator", {"limit": 9999})
+
+    assert _last_variables(route)["first"] == 500

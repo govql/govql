@@ -30,7 +30,7 @@ __all__ = [
 LIMIT_DEFAULT = 20
 LIMIT_MAX = 500
 RESPONSE_BYTE_BUDGET = 100_000
-_ENVELOPE_OVERHEAD = 2_000  # room for result_count/truncated/keys around the list
+_ENVELOPE_OVERHEAD = 2_000  # room for total_matches/truncated/keys around the list
 
 _PARTY_FULL = {
     "d": "Democrat", "dem": "Democrat", "democrat": "Democrat", "democratic": "Democrat",

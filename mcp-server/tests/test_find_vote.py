@@ -15,6 +15,7 @@ def _last_variables(route) -> dict:
 
 _ONE_VOTE = {
     "allVotes": {
+        "totalCount": 1,
         "nodes": [
             {"voteId": "s100-118.2023", "chamber": "s", "congress": 118,
              "votedAt": "2023-05-10T00:00:00Z", "category": "cloture",
@@ -43,8 +44,9 @@ async def test_builds_normalized_filter_and_shapes(client, mock_graphql, govql_e
     assert filt["congress"]["equalTo"] == 118
     assert filt["category"]["equalTo"] == "cloture"
     payload = tool_payload(result)
-    assert payload["data"]["result_count"] == 1
+    assert payload["data"]["total_matches"] == 1
     assert payload["data"]["votes"][0]["voteId"] == "s100-118.2023"
+    assert payload["data"]["votes"][0]["chamber"] == "Senate"  # humanized
     assert result.is_error is False
 
 
@@ -78,3 +80,35 @@ async def test_network_failure_returns_errors_payload(client, mock_graphql, govq
     payload = tool_payload(result)
     assert "Failed to reach GovQL endpoint" in payload["errors"][0]["message"]
     assert result.is_error is False
+
+
+async def test_limit_is_clamped_to_max(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data={"allVotes": {"nodes": []}})
+    )
+
+    await client.call_tool("find_vote", {"limit": 9999})
+
+    assert _last_variables(route)["first"] == 500
+
+
+async def test_oversized_response_is_truncated(client, mock_graphql, govql_endpoint):
+    big_nodes = [
+        {"voteId": f"s{i}-118.2023", "chamber": "s", "congress": 118,
+         "votedAt": "2023-05-10T00:00:00Z", "category": "cloture",
+         "question": "Q" * 1000, "result": "Agreed to",
+         "resultText": "Agreed to", "sourceUrl": "https://example.gov"}
+        for i in range(500)
+    ]
+    mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(
+            data={"allVotes": {"totalCount": 500, "nodes": big_nodes}}
+        )
+    )
+
+    result = await client.call_tool("find_vote", {"topic": "budget"})
+
+    data = tool_payload(result)["data"]
+    assert data["truncated"] is True
+    assert data["total_matches"] == 500
+    assert 0 < len(data["votes"]) < data["total_matches"]

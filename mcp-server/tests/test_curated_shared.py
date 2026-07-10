@@ -64,3 +64,9 @@ def test_guard_items_truncates_oversized():
     assert truncated is True
     assert 0 < len(guarded) < len(items)
     assert len(json.dumps(guarded)) <= cs.RESPONSE_BYTE_BUDGET
+
+
+def test_today_iso_is_todays_date():
+    from datetime import date
+
+    assert cs.today_iso() == date.today().isoformat()
