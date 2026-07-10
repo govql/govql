@@ -58,15 +58,6 @@ server has no runtime coupling to the JS backend, lives in a sibling
 directory at the repo root, and follows the conventions of a normal Python
 project (no shared linter, no shared lockfile, no proxied build commands).
 
-## Why no Dockerfile
-
-stdio MCP servers are spawned by the MCP client (Claude Desktop, Cursor,
-etc.) as a per-session subprocess. There is no long-running server to host.
-A Dockerfile would only be useful if a client wanted to run the server in
-a container, which is not how any current MCP client works. If demand
-emerges later we can publish a Docker image alongside the PyPI release;
-shipping one now would be cargo-cult engineering.
-
 ## Roadmap
 
 v0.1 ships the foundation. **v0.1.1** then closed a discoverability gap: with
