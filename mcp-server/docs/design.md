@@ -113,12 +113,13 @@ in the docs site, LLM-tuned schema descriptions — rather than expanding the
 MCP surface further. That data work is what the relocated bill/committee
 tools below are waiting on.
 
-### Post-v0.4 (data- or FK-gated)
+### Post-v0.4 (data- or scope-deferred)
 
-These are designed but deferred until their prerequisites land:
+These are designed but held back — by unpopulated data or by milestone scope:
 
-- **`most_agreeing_pairs`** (cross-party) — needs the `vote_similarity`
-  legislator FKs (#63) for inline `legislatorByMemberA/B` navigation.
+- **`most_agreeing_pairs`** (cross-party) — uses the `vote_similarity`
+  legislator FKs (#63, shipped) for inline `legislatorByMemberA/B` navigation;
+  deferred by milestone scope, not a missing prerequisite.
 - **`find_bill`, `list_committees`** (discovery) and **`get_bill`,
   `get_committee`** (detail) — need the `bills`/`cosponsors`/`committees`
   tables populated (the post-v0.4 GovQL data work).
