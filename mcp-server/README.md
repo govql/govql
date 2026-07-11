@@ -115,8 +115,9 @@ As of 0.4.0, the server provides the three foundational tools (`execute_graphql`
 (`find_legislator`, `find_vote`), **per-entity detail** tools (`get_legislator`,
 `get_vote_with_positions`), and **analysis** tools (`get_voting_record`,
 `compare_voters`, `find_party_defectors`) — the curated discovery/detail/analysis
-set is now complete. The remaining `most_agreeing_pairs` tool and the
-bill/committee tools are post-v0.4, gated on data and FK work — see
+set is now complete. The remaining `most_agreeing_pairs` and bill/committee
+tools are post-v0.4: the bill/committee tools await GovQL data population, and
+`most_agreeing_pairs` is a scope-deferred extension of `compare_voters` — see
 [design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md).
 
 ## Links
