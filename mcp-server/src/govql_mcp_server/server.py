@@ -18,6 +18,7 @@ from .tools import (  # noqa: E402, F401
     compare_voters,
     describe_type,
     find_legislator,
+    find_party_defectors,
     find_vote,
     get_legislator,
     get_vote_with_positions,
