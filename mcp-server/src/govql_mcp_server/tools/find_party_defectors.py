@@ -12,6 +12,8 @@ from ..logger import logger
 from ..server import mcp
 from ._curated_shared import (
     clamp_limit,
+    display_chamber_code,
+    full_name,
     network_error_response,
     normalize_chamber_code,
     normalize_party_code,
@@ -23,6 +25,7 @@ query FindPartyDefectors($filter: MemberPartyAgreementFilter, $first: Int) {
     nodes {
       bioguideId
       memberParty
+      chamber
       agreementRate
       sharedVotes
       agreed
@@ -90,14 +93,16 @@ async def find_party_defectors(
     defectors = []
     for row in result["data"]["allMemberPartyAgreements"]["nodes"]:
         leg = row.get("legislatorByBioguideId") or {}
-        name = " ".join(x for x in (leg.get("firstName"), leg.get("lastName")) if x) or None
+        name = full_name(leg)
         defectors.append({
             "bioguideId": row["bioguideId"],
             "name": name,
             "memberParty": row["memberParty"],
+            "chamber": display_chamber_code(row.get("chamber")),
             "agreementRate": row["agreementRate"],
             "sharedVotes": row["sharedVotes"],
             "agreed": row["agreed"],
         })
 
-    return {"data": {"congress": congress, "chamber": chamber_code, "defectors": defectors}}
+    return {"data": {"congress": congress, "chamber": display_chamber_code(chamber_code),
+                      "defectors": defectors}}

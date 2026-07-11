@@ -12,7 +12,7 @@ def _last_variables(route) -> dict:
 
 
 _DATA = {"allMemberPartyAgreements": {"nodes": [
-    {"bioguideId": "M000001", "memberParty": "D", "agreementRate": 0.55,
+    {"bioguideId": "M000001", "memberParty": "D", "chamber": "s", "agreementRate": 0.55,
      "sharedVotes": 500, "agreed": 275,
      "legislatorByBioguideId": {"firstName": "Joe", "lastName": "Manchin"}},
 ]}}
@@ -33,6 +33,8 @@ async def test_all_parties_uses_or_of_own_party_clauses(client, mock_graphql, go
     d = tool_payload(result)["data"]["defectors"][0]
     assert d["name"] == "Joe Manchin"
     assert d["memberParty"] == "D"
+    assert d["chamber"] == "Senate"
+    assert tool_payload(result)["data"]["chamber"] == "Senate"
     assert result.is_error is False
 
 
@@ -56,3 +58,13 @@ async def test_unknown_party_errors_without_network(client, mock_graphql, govql_
 
     assert "Unrecognized party" in tool_payload(result)["errors"][0]["message"]
     assert route.called is False
+
+
+async def test_limit_is_clamped(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(return_value=graphql_response(data=_DATA))
+
+    await client.call_tool("find_party_defectors", {"congress": 118})
+    assert _last_variables(route)["first"] == 20          # default
+
+    await client.call_tool("find_party_defectors", {"congress": 118, "limit": 9999})
+    assert _last_variables(route)["first"] == 500          # capped at LIMIT_MAX

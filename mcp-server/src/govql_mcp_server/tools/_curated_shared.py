@@ -21,6 +21,7 @@ __all__ = [
     "normalize_position",
     "display_chamber_code",
     "display_chamber_termtype",
+    "full_name",
     "clamp_limit",
     "today_iso",
     "guard_items",
@@ -153,6 +154,14 @@ def display_chamber_termtype(term_type: str | None) -> str | None:
     ``None``) — never raises.
     """
     return _CHAMBER_TERMTYPE_DISPLAY.get(term_type, term_type)
+
+
+def full_name(node: dict[str, Any] | None) -> str | None:
+    """Join a legislator node's firstName + lastName into a display name.
+
+    None-safe: a missing node or missing parts yield None."""
+    node = node or {}
+    return " ".join(x for x in (node.get("firstName"), node.get("lastName")) if x) or None
 
 
 def clamp_limit(value: int | None) -> int:

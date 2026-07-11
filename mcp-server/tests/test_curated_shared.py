@@ -106,3 +106,16 @@ def test_normalize_position_variants():
 def test_normalize_position_rejects_unknown():
     with pytest.raises(ValueError):
         cs.normalize_position("maybe")
+
+
+def test_full_name_joins_first_and_last():
+    assert cs.full_name({"firstName": "Alex", "lastName": "Padilla"}) == "Alex Padilla"
+
+
+def test_full_name_none_safe():
+    assert cs.full_name(None) is None
+    assert cs.full_name({}) is None
+
+
+def test_full_name_first_only():
+    assert cs.full_name({"firstName": "Alex"}) == "Alex"

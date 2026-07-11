@@ -10,7 +10,7 @@ from pydantic import Field
 from .. import graphql_client
 from ..logger import logger
 from ..server import mcp
-from ._curated_shared import network_error_response
+from ._curated_shared import display_chamber_code, full_name, network_error_response
 
 _QUERY = """
 query CompareVoters($a: String!, $b: String!, $filter: VoteSimilarityFilter) {
@@ -21,11 +21,6 @@ query CompareVoters($a: String!, $b: String!, $filter: VoteSimilarityFilter) {
   mb: legislatorByBioguideId(bioguideId: $b) { firstName lastName }
 }
 """
-
-
-def _name(node: dict[str, Any] | None) -> str | None:
-    node = node or {}
-    return " ".join(x for x in (node.get("firstName"), node.get("lastName")) if x) or None
 
 
 @mcp.tool
@@ -72,7 +67,7 @@ async def compare_voters(
         shared = row["sharedVotes"]
         comparisons.append({
             "congress": row["congress"],
-            "chamber": row["chamber"],
+            "chamber": display_chamber_code(row["chamber"]),
             "sharedVotes": shared,
             "agreed": row["agreed"],
             "agreementRate": (row["agreed"] / shared) if shared else None,
@@ -80,8 +75,8 @@ async def compare_voters(
     comparisons.sort(key=lambda r: r["congress"], reverse=True)
 
     out: dict[str, Any] = {
-        "memberA": {"bioguideId": a, "name": _name(data.get("ma"))},
-        "memberB": {"bioguideId": b, "name": _name(data.get("mb"))},
+        "memberA": {"bioguideId": a, "name": full_name(data.get("ma"))},
+        "memberB": {"bioguideId": b, "name": full_name(data.get("mb"))},
         "comparisons": comparisons,
     }
     if not comparisons:

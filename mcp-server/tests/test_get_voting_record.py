@@ -31,7 +31,7 @@ async def test_aggregates_per_congress_with_loyalty(client, mock_graphql, govql_
     assert data["name"] == "Alex Padilla"
     rec = data["records"][0]
     assert rec["congress"] == 118
-    assert rec["chamber"] == "s"
+    assert rec["chamber"] == "Senate"
     assert rec["totalVotes"] == 200           # 100+40+10+50
     assert rec["yea"] == 150
     assert rec["nay"] == 40
@@ -76,7 +76,7 @@ async def test_buckets_by_meaning_house_impeachment_and_speaker(
 
     # 118: House Aye->yea, No->nay, Speaker name (Jeffries)->other, Not Voting.
     r118 = records[118]
-    assert r118["chamber"] == "h"
+    assert r118["chamber"] == "House"
     assert r118["yea"] == 30          # Aye
     assert r118["nay"] == 20          # No
     assert r118["present"] == 0

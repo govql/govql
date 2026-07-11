@@ -10,13 +10,13 @@ from pydantic import Field
 from .. import graphql_client
 from ..logger import logger
 from ..server import mcp
-from ._curated_shared import network_error_response
+from ._curated_shared import display_chamber_code, full_name, network_error_response
 
 _QUERY = """
 query GetVotingRecord($sFilter: MemberVotingSummaryFilter,
                       $aFilter: MemberPartyAgreementFilter, $id: String!) {
   s: allMemberVotingSummaries(filter: $sFilter) {
-    nodes { congress category position positions }
+    nodes { congress position positions }
   }
   a: allMemberPartyAgreements(filter: $aFilter) {
     nodes { congress chamber memberParty otherParty agreementRate }
@@ -82,7 +82,7 @@ async def get_voting_record(
 
     data = result["data"]
     member = data.get("m") or {}
-    name = " ".join(x for x in (member.get("firstName"), member.get("lastName")) if x) or None
+    name = full_name(member)
 
     # Aggregate summary rows per congress (bucket by meaning).
     per_congress: dict[int, dict[str, Any]] = {}
@@ -101,7 +101,7 @@ async def get_voting_record(
             rec = per_congress.get(row["congress"])
             if rec is not None:
                 rec["partyLoyaltyRate"] = row["agreementRate"]
-                rec["chamber"] = row["chamber"]
+                rec["chamber"] = display_chamber_code(row["chamber"])
 
     for rec in per_congress.values():
         total = rec["totalVotes"]
