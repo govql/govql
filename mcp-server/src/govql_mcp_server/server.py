@@ -20,6 +20,7 @@ from .tools import (  # noqa: E402, F401
     find_vote,
     get_legislator,
     get_vote_with_positions,
+    get_voting_record,
     list_types,
     passthrough,
 )
