@@ -98,6 +98,10 @@ into one of three categories:
   `compare_voters`, `find_party_defectors`): tools that answer questions, not
   just retrieve data.
 
+As of 0.4.0, all three milestones above have shipped — the curated
+discovery/detail/analysis set is complete. The roadmap continues below at
+Post-v0.4.
+
 Past v0.4, the project's wishlist shifts back to improving GovQL itself first
 — populating the `bills`/`cosponsors`/`committees` tables, a NL-query helper
 in the docs site, LLM-tuned schema descriptions — rather than expanding the

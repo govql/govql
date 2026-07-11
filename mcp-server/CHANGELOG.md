@@ -4,6 +4,17 @@ All notable changes to `govql-mcp-server` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-07-09
+
+### Added
+
+- `get_voting_record` tool — per-congress participation and party-loyalty rates
+  for a member, from the precomputed voting summaries.
+- `compare_voters` tool — pairwise agreement between two members (shared votes,
+  agreed count, agreement rate) per congress+chamber, via `vote_similarity`.
+- `find_party_defectors` tool — members ranked by lowest own-party agreement in
+  a congress, with optional party/chamber filters.
+
 ## [0.3.0] — 2026-07-09
 
 ### Added
