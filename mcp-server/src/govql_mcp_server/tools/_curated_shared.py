@@ -18,6 +18,9 @@ __all__ = [
     "normalize_chamber_termtype",
     "normalize_chamber_code",
     "normalize_state",
+    "normalize_position",
+    "display_chamber_code",
+    "display_chamber_termtype",
     "clamp_limit",
     "today_iso",
     "guard_items",
@@ -74,6 +77,14 @@ _CHAMBER_CODE = {
     "house": "h",
     "rep": "h",
 }
+_POSITION = {
+    "yea": "Yea",
+    "nay": "Nay",
+    "present": "Present",
+    "not voting": "Not Voting",
+}
+_CHAMBER_CODE_DISPLAY = {"s": "Senate", "h": "House"}
+_CHAMBER_TERMTYPE_DISPLAY = {"sen": "Senate", "rep": "House"}
 
 
 def _lookup(value: str | None, table: dict[str, str], label: str) -> str | None:
@@ -118,6 +129,29 @@ def normalize_state(value: str | None) -> str | None:
             f"Unrecognized state: {value!r}. Expected a 2-letter code (e.g. 'CA')."
         )
     return v
+
+
+def normalize_position(value: str | None) -> str | None:
+    """Friendly position input -> canonical string ('Yea'/'Nay'/'Present'/'Not Voting')."""
+    return _lookup(value, _POSITION, "position")
+
+
+def display_chamber_code(code: str | None) -> str | None:
+    """votes.chamber code ('s'/'h') -> human label ('Senate'/'House').
+
+    Passes the value through unchanged if it isn't recognized (including
+    ``None``) — never raises.
+    """
+    return _CHAMBER_CODE_DISPLAY.get(code, code)
+
+
+def display_chamber_termtype(term_type: str | None) -> str | None:
+    """legislator_terms.term_type ('sen'/'rep') -> human label ('Senate'/'House').
+
+    Passes the value through unchanged if it isn't recognized (including
+    ``None``) — never raises.
+    """
+    return _CHAMBER_TERMTYPE_DISPLAY.get(term_type, term_type)
 
 
 def clamp_limit(value: int | None) -> int:

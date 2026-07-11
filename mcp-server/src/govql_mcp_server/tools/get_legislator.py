@@ -10,7 +10,7 @@ from pydantic import Field
 from .. import graphql_client
 from ..logger import logger
 from ..server import mcp
-from ._curated_shared import network_error_response, today_iso
+from ._curated_shared import display_chamber_termtype, network_error_response, today_iso
 
 _QUERY = """
 query GetLegislator($id: String!) {
@@ -38,8 +38,6 @@ query GetLegislator($id: String!) {
 }
 """
 
-_CHAMBER_DISPLAY = {"sen": "Senate", "rep": "House"}
-
 
 def _current(terms: list[dict[str, Any]]) -> dict[str, Any] | None:
     now = today_iso()
@@ -49,7 +47,7 @@ def _current(terms: list[dict[str, Any]]) -> dict[str, Any] | None:
             return {
                 "party": term.get("party"),
                 "state": term.get("state"),
-                "chamber": _CHAMBER_DISPLAY.get(term.get("termType")),
+                "chamber": display_chamber_termtype(term.get("termType")),
                 "district": term.get("district"),
             }
     return None

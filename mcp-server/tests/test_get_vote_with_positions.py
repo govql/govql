@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import httpx
+
 from tests.conftest import graphql_response, tool_payload
 
 
@@ -46,6 +48,7 @@ async def test_default_returns_tallies_no_positions(client, mock_graphql, govql_
     assert "votePositionsByVoteIdList" not in _last_body(route)["query"]
     data = tool_payload(result)["data"]
     assert data["vote"]["voteId"] == "s192-119.2026"
+    assert data["vote"]["chamber"] == "Senate"  # humanized from "s"
     assert data["totals"] == {"Yea": 47, "Nay": 50, "Present": 1, "Not Voting": 2}
     assert data["party_breakdown"]["D"]["Yea"] == 43
     assert data["party_breakdown"]["R"]["Nay"] == 49
@@ -87,3 +90,80 @@ async def test_missing_vote_returns_null(client, mock_graphql, govql_endpoint):
     result = await client.call_tool("get_vote_with_positions", {"vote_id": "nope"})
 
     assert tool_payload(result)["data"]["vote"] is None
+
+
+async def test_network_failure_returns_errors_payload(client, mock_graphql, govql_endpoint):
+    mock_graphql.post(govql_endpoint).mock(side_effect=httpx.ConnectError("down"))
+
+    result = await client.call_tool(
+        "get_vote_with_positions", {"vote_id": "s192-119.2026"}
+    )
+
+    payload = tool_payload(result)
+    assert "Failed to reach GovQL endpoint" in payload["errors"][0]["message"]
+    assert result.is_error is False
+
+
+async def test_party_filter_is_normalized_to_code(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_VOTE)
+    )
+
+    await client.call_tool(
+        "get_vote_with_positions", {"vote_id": "s192-119.2026", "party": "d"}
+    )
+
+    pos_filter = _last_body(route)["variables"]["posFilter"]
+    assert pos_filter["party"]["equalTo"] == "D"
+
+
+async def test_position_filter_is_normalized(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_VOTE)
+    )
+
+    await client.call_tool(
+        "get_vote_with_positions", {"vote_id": "s192-119.2026", "position": "nay"}
+    )
+
+    pos_filter = _last_body(route)["variables"]["posFilter"]
+    assert pos_filter["position"]["equalTo"] == "Nay"
+
+
+async def test_include_positions_defaults_to_full_roster(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_VOTE)
+    )
+
+    await client.call_tool(
+        "get_vote_with_positions",
+        {"vote_id": "s192-119.2026", "include_positions": True},
+    )
+
+    assert _last_body(route)["variables"]["posFirst"] == 500
+
+
+async def test_explicit_positions_limit_still_honored(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_VOTE)
+    )
+
+    await client.call_tool(
+        "get_vote_with_positions",
+        {"vote_id": "s192-119.2026", "include_positions": True, "positions_limit": 5},
+    )
+
+    assert _last_body(route)["variables"]["posFirst"] == 5
+
+
+async def test_blank_vote_id_rejected_without_network(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(
+            data={"voteByVoteId": None, "t": {"nodes": []}, "b": {"nodes": []}}
+        )
+    )
+
+    result = await client.call_tool("get_vote_with_positions", {"vote_id": "  "})
+
+    assert "non-empty" in tool_payload(result)["errors"][0]["message"]
+    assert route.called is False

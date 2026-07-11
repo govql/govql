@@ -12,10 +12,13 @@ from .. import graphql_client
 from ..logger import logger
 from ..server import mcp
 from ._curated_shared import (
+    LIMIT_MAX,
     clamp_limit,
+    display_chamber_code,
     guard_items,
     network_error_response,
     normalize_party_code,
+    normalize_position,
     normalize_state,
 )
 
@@ -57,8 +60,9 @@ async def get_vote_with_positions(
         str, Field(description="The vote id (e.g. 's192-119.2026'). Get one from find_vote."),
     ],
     include_positions: Annotated[
-        bool, Field(description="Include the per-member position list (up to ~500 "
-                              "rows). Default false — tallies only."),
+        bool, Field(description="Include the per-member position list — returns the "
+                              "full roster (up to ~500, byte-guarded). Default "
+                              "false — tallies only."),
     ] = False,
     party: Annotated[
         str | None, Field(description="Only positions from this party ('D'/'R'/'I'). "
@@ -73,7 +77,8 @@ async def get_vote_with_positions(
                                      "'Not Voting'. Implies include_positions."),
     ] = None,
     positions_limit: Annotated[
-        int | None, Field(description="Max positions returned (default 20, cap 500)."),
+        int | None, Field(description="Max positions returned; default = the full "
+                                     "roster (up to 500). Set lower to sample."),
     ] = None,
 ) -> dict[str, Any]:
     """Return one roll-call vote with tallies, party breakdown, and optional
@@ -85,6 +90,9 @@ async def get_vote_with_positions(
     `party`/`state`/`position`) to also get the individual member list.
     `data.vote` is null if the vote id doesn't exist.
     """
+    if not vote_id or not vote_id.strip():
+        return {"data": None, "errors": [{"message": "vote_id must be a non-empty string"}]}
+
     want_positions = include_positions or any(v is not None for v in (party, state, position))
 
     try:
@@ -94,14 +102,16 @@ async def get_vote_with_positions(
         if state is not None:
             pos_filter["state"] = {"equalTo": normalize_state(state)}
         if position is not None:
-            pos_filter["position"] = {"equalTo": position}
+            pos_filter["position"] = {"equalTo": normalize_position(position)}
     except ValueError as err:
         return {"data": None, "errors": [{"message": str(err)}]}
 
     variables: dict[str, Any] = {"vid": vote_id}
     if want_positions:
         variables["posFilter"] = pos_filter or None
-        variables["posFirst"] = clamp_limit(positions_limit)
+        variables["posFirst"] = (
+            LIMIT_MAX if positions_limit is None else clamp_limit(positions_limit)
+        )
 
     try:
         result = await graphql_client.execute_graphql(_build_query(want_positions), variables)
@@ -117,6 +127,7 @@ async def get_vote_with_positions(
     if vote is None:
         return {"data": {"vote": None, "totals": {}, "party_breakdown": {},
                          "positions": None, "truncated": False}}
+    vote["chamber"] = display_chamber_code(vote.get("chamber"))
 
     totals = {r["position"]: r["positions"] for r in data["t"]["nodes"]}
     breakdown: dict[str, dict[str, int]] = {}

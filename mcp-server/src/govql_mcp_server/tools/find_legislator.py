@@ -12,6 +12,7 @@ from ..logger import logger
 from ..server import mcp
 from ._curated_shared import (
     clamp_limit,
+    display_chamber_termtype,
     guard_items,
     network_error_response,
     normalize_chamber_termtype,
@@ -41,8 +42,6 @@ query FindLegislator($filter: LegislatorFilter, $first: Int) {
 }
 """
 
-_CHAMBER_DISPLAY = {"sen": "Senate", "rep": "House"}
-
 
 def _shape(node: dict[str, Any]) -> dict[str, Any]:
     terms = node.get("legislatorTermsByBioguideIdList") or []
@@ -55,7 +54,7 @@ def _shape(node: dict[str, Any]) -> dict[str, Any]:
         "officialFull": node.get("officialFull"),
         "party": latest.get("party"),
         "state": latest.get("state"),
-        "chamber": _CHAMBER_DISPLAY.get(latest.get("termType")),
+        "chamber": display_chamber_termtype(latest.get("termType")),
         "district": latest.get("district"),
         "current": bool(end and end > today_iso()),
     }

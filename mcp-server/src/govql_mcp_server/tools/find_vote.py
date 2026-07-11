@@ -12,12 +12,11 @@ from ..logger import logger
 from ..server import mcp
 from ._curated_shared import (
     clamp_limit,
+    display_chamber_code,
     guard_items,
     network_error_response,
     normalize_chamber_code,
 )
-
-_CHAMBER_DISPLAY = {"s": "Senate", "h": "House"}
 
 _QUERY = """
 query FindVote($filter: VoteFilter, $first: Int) {
@@ -115,7 +114,7 @@ async def find_vote(
 
     connection = result["data"]["allVotes"]
     shaped = [
-        {**n, "chamber": _CHAMBER_DISPLAY.get(n.get("chamber"), n.get("chamber"))}
+        {**n, "chamber": display_chamber_code(n.get("chamber"))}
         for n in connection["nodes"]
     ]
     items, truncated = guard_items(shaped)
