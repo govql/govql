@@ -59,6 +59,10 @@ async def test_returns_identity_terms_and_current(client, mock_graphql, govql_en
     assert leg["bioguideId"] == "P000145"
     assert leg["nickname"] == "Alex"
     assert len(leg["terms"]) == 2
+    assert leg["terms"][0]["chamber"] == "Senate"    # humanized from termType "sen"
+    assert "termType" not in leg["terms"][0]          # raw code renamed to chamber
+    assert leg["terms"][0]["party"] == "Democrat"     # other term fields preserved
+    assert leg["terms"][0]["state"] == "CA"
     assert leg["current"]["party"] == "Democrat"     # from the future-ending term
     assert leg["current"]["chamber"] == "Senate"
     assert result.is_error is False

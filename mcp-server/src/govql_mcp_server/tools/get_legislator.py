@@ -53,6 +53,20 @@ def _current(terms: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def _term(term: dict[str, Any]) -> dict[str, Any]:
+    """One term with its chamber humanized (termType 'sen'/'rep' -> Senate/House)."""
+    return {
+        "chamber": display_chamber_termtype(term.get("termType")),
+        "party": term.get("party"),
+        "state": term.get("state"),
+        "district": term.get("district"),
+        "startDate": term.get("startDate"),
+        "endDate": term.get("endDate"),
+        "how": term.get("how"),
+        "caucus": term.get("caucus"),
+    }
+
+
 @mcp.tool
 async def get_legislator(
     bioguide_id: Annotated[
@@ -94,7 +108,7 @@ async def get_legislator(
         "officialFull": node.get("officialFull"),
         "birthday": node.get("birthday"),
         "gender": node.get("gender"),
-        "terms": terms,
+        "terms": [_term(t) for t in terms],
         "current": _current(terms),
     }
     return {"data": {"legislator": legislator}}
