@@ -15,6 +15,7 @@ mcp = FastMCP("govql", version=__version__)
 # Imports are at the bottom to break the circular import between this module
 # and the tool modules (which import `mcp` from here).
 from .tools import (  # noqa: E402, F401
+    compare_voters,
     describe_type,
     find_legislator,
     find_vote,
