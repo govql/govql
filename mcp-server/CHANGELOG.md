@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `find_legislator` tool — discover members by `name`, `state`, `party`, and
-  `chamber` (matched against their terms), with `current_only` (default) and a
-  `limit`. Returns a compact ranked list with each member's `bioguideId` and
-  current party/state/chamber.
+- `find_legislator` tool — discover members by `name`, `state`, `party`,
+  `chamber`, and `district` (matched against their terms), with `current_only`
+  (default) and a `limit`. Returns a compact list with each member's
+  `bioguideId` and current party/state/chamber/district.
 - `find_vote` tool — search roll-call votes by `topic` (free-text over the vote
   question), `chamber`, `congress`, and `category`, newest first, with a `limit`.
 - Curated tools cap result size two ways: a `limit` (default 20, max 500) and a
