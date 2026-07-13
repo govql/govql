@@ -110,8 +110,9 @@ async def find_legislator(
     matching members with their bioguide id and a compact snapshot of their
     latest term (name, party, state, chamber, district). Identity search only —
     it does NOT return committee membership, tenure, or voting behavior (and the
-    committees/bills tables aren't populated). For voting data or a full term
-    history, query `execute_graphql` directly.
+    committees/bills tables aren't populated). For a member's full detail (bio
+    plus complete term history), pass a returned `bioguideId` to `get_legislator`;
+    for voting data, query `execute_graphql`.
 
     - `name` is a case-insensitive substring matched across first/last/official-
       full/nickname.

@@ -80,8 +80,8 @@ async def find_vote(
     and bill subject data isn't populated yet, so `topic` will MISS many on-topic
     votes. Don't rely on it for "every vote about X."
 
-    Pass a returned `voteId` into an `execute_graphql` query for tallies and
-    member positions.
+    Pass a returned `voteId` to `get_vote_with_positions` for tallies, the
+    per-party breakdown, and (optionally) individual member positions.
 
     `total_matches` is how many votes match the filter overall (it can exceed
     the number returned — raise `limit` or refine the filter). `truncated` is
