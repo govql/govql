@@ -52,10 +52,16 @@ The `us-congress` Postgres schema is managed with **Flyway**.
   a blanket `SELECT` plus `ALTER DEFAULT PRIVILEGES`. But any **new table holding
   secrets** must be explicitly `REVOKE`d (see `V002__grafana_reader_grants.sql`,
   which revokes `api_keys`).
-- **Deploying schema changes:** `git pull` then `docker compose up` — the gated
-  one-shot `flyway` service runs `migrate` and the API server restarts after it.
-  Existing databases were adopted with a one-time
-  `flyway baseline -baselineVersion=1`. Full dev/prod steps are in
+- **Deploying (one-click):** every change ships by merge to `main` → CI builds
+  SHA-tagged images → a one-click approval on the GitHub `production`
+  environment → the droplet checks out the commit and runs
+  `us-congress/deploy/deploy.sh` (pull + digest verify + `up -d`). Never run a
+  bare `docker compose up` on the droplet — compose resolves `${IMAGE_TAG}` to
+  `latest` without the scripts; the manual path is
+  `us-congress/deploy/up.sh --pull`. Schema changes ride along: the gated
+  one-shot `flyway` service runs `migrate` on the way up and the API server
+  restarts after it (existing databases were adopted with a one-time
+  `flyway baseline -baselineVersion=1`). Full dev/prod steps are in
   [`us-congress/README.md`](us-congress/README.md).
 - **Flyway image** is pinned to a specific version (`flyway/flyway:12.9.0-alpine`)
   for reproducible deploys — bump it deliberately, not via a floating tag.

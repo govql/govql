@@ -15,13 +15,18 @@ on:
       - 'us-congress/**'
       - '.github/workflows/us-congress.yml'
 
+# Deliberately minimal: packages: write is granted job-level to `images` only,
+# so a PR-triggered run of any other job never carries a token that could
+# overwrite GHCR tags.
 permissions:
   contents: read
-  packages: write
 
 jobs:
   images:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +73,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -77,3 +83,146 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # GHCR tags are mutable; the digest is not. Record what was actually
+      # built so the deploy job can have the droplet verify the pulled images
+      # are byte-for-byte these — a tag overwritten between build and approval
+      # is refused on-box (deploy/deploy.sh).
+      - name: Record image digest
+        if: github.event_name == 'push'
+        run: echo "${{ matrix.name }} ${{ steps.build.outputs.digest }}" > "digest-${{ matrix.name }}.txt"
+
+      - name: Upload image digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}
+          path: digest-${{ matrix.name }}.txt
+          # overwrite: a "Re-run all jobs" re-uploads the same artifact name
+          # and would otherwise 409 — and re-running is the CI path to
+          # redeploying the current sha. 90 days: an environment approval can
+          # arrive up to 30 days after the run; the digests must outlive it.
+          overwrite: true
+          retention-days: 90
+
+  # The deploy invariant tests (us-congress/deploy) and the ingester suite.
+  # deploy waits on this job, so a PR that breaks an invariant — dropping the
+  # approval gate, referencing a new secret — fails before anything ships.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Deploy invariant tests
+        run: cd us-congress/deploy && npm ci && npm test
+      - name: Ingester tests
+        run: cd us-congress/ingester && npm ci && npm test
+
+  # Announce that a deploy is waiting for its one-click approval. Runs outside
+  # the production environment — a job inside it would itself wait on the
+  # approval — which is why SLACK_WEBHOOK_URL is a repo-level secret, not an
+  # environment secret. GitHub's native environment notification also fires.
+  # Waits on the tests too: if they fail, the deploy is skipped and never
+  # waits at the gate, so announcing it would be a false ping.
+  notify-pending:
+    needs: [images, test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Notify Slack — awaiting approval
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"⏳ govql production deploy awaiting approval: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
+
+  # Deploy: released by a one-click approval on the GitHub `production`
+  # environment (required reviewer = the manual gate; remove the reviewer in
+  # the environment settings to graduate to continuous deployment). SSHes to
+  # the droplet as the unprivileged govql user; the deploy key's forced
+  # command (deploy/ci-deploy.sh) validates the sha, checks it out, and runs
+  # deploy/deploy.sh, which pulls the SHA-tagged app images and refuses to
+  # start unless their digests match what the build job reported (stdin).
+  # The `environment:` key records each run as a GitHub deployment for the
+  # audit trail. CI holds no application secrets — only the deploy key and
+  # the Slack webhook; app secrets stay on the droplet in dotenvx.
+  deploy:
+    needs: [images, test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Serialize deploys so two quick merges can't interleave on the droplet.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://govql.us
+    steps:
+      - name: Set up the deploy key and pinned host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET_HOST_KEY: ${{ vars.DROPLET_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DROPLET_HOST_KEY" > ~/.ssh/known_hosts
+
+      - name: Collect built image digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Deploy over SSH
+        env:
+          DROPLET_HOST: ${{ vars.DROPLET_HOST }}
+          TARGET_SHA: ${{ github.sha }}
+        # The remote side is the key's forced command (deploy/ci-deploy.sh):
+        # the command is nothing but the target sha, and the expected digests
+        # ride in on stdin. The key can do nothing else.
+        run: |
+          cat digests/*.txt > digests.txt
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "govql@$DROPLET_HOST" \
+            "$TARGET_SHA" < digests.txt
+
+  # Report the deploy's outcome to Slack from a follow-up job, not steps in
+  # deploy itself: a deploy cancelled before it starts (superseded in the
+  # concurrency group, or rejected at the approval gate) never runs its
+  # steps, so only a needs:-dependent job with always() can report it.
+  # Skipped deploys (a failed test job) are deliberately quiet — no pending
+  # ping was sent for them either.
+  notify-outcome:
+    needs: [deploy]
+    if: >-
+      always() && github.event_name == 'push' &&
+      contains(fromJSON('["success", "failure", "cancelled"]'), needs.deploy.result)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RESULT: ${{ needs.deploy.result }}
+    steps:
+      - name: Notify Slack — deploy outcome
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          case "$RESULT" in
+            success)   text="✅ govql production deploy succeeded" ;;
+            failure)   text="❌ govql production deploy FAILED (or was rejected at the gate)" ;;
+            cancelled) text="⚪ govql production deploy cancelled (superseded or stopped)" ;;
+          esac
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"${text}: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
