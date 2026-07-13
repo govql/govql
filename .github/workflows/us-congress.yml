@@ -77,3 +77,88 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # Announce that a deploy is waiting for its one-click approval. Runs outside
+  # the production environment — a job inside it would itself wait on the
+  # approval — which is why SLACK_WEBHOOK_URL is a repo-level secret, not an
+  # environment secret. GitHub's native environment notification also fires.
+  notify-pending:
+    needs: images
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Notify Slack — awaiting approval
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"⏳ govql production deploy awaiting approval: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
+
+  # Deploy: released by a one-click approval on the GitHub `production`
+  # environment (required reviewer = the manual gate; remove the reviewer in
+  # the environment settings to graduate to continuous deployment). SSHes to
+  # the droplet as the unprivileged govql user, checks out the pushed commit,
+  # and swaps the stack to its SHA-tagged images via deploy/up.sh --pull.
+  # The `environment:` key records each run as a GitHub deployment for the
+  # audit trail. CI holds no application secrets — only the deploy key and
+  # the Slack webhook; app secrets stay on the droplet in dotenvx.
+  deploy:
+    needs: images
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Serialize deploys so two quick merges can't interleave on the droplet.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://govql.us
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Set up the deploy key and pinned host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET_HOST_KEY: ${{ vars.DROPLET_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DROPLET_HOST_KEY" > ~/.ssh/known_hosts
+
+      - name: Deploy over SSH
+        env:
+          DROPLET_HOST: ${{ vars.DROPLET_HOST }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "govql@$DROPLET_HOST" \
+            "set -euo pipefail
+             cd /opt/govql
+             git fetch origin
+             git checkout --detach '$TARGET_SHA'
+             exec us-congress/deploy/up.sh --pull"
+
+      - name: Notify Slack — success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"✅ govql production deploy succeeded: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
+
+      - name: Notify Slack — failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"❌ govql production deploy FAILED: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"

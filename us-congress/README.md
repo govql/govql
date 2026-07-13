@@ -125,7 +125,12 @@ usermod -aG docker govql
 mkdir -p /opt/govql
 chown govql:govql /opt/govql
 
-# Systemd service (runs as govql, not root)
+# Systemd service (runs as govql, not root). A one-shot `up -d`, not a
+# foreground supervisor: the CI deploy recreates containers out from under
+# systemd, so nothing may hold the stack in the foreground. Crash recovery
+# comes from each service's `restart: always` in compose. up.sh derives
+# IMAGE_TAG from the checked-out commit, so a reboot restores exactly the
+# images that were last deployed.
 tee /etc/systemd/system/govql.service <<EOF
 [Unit]
 Description=GovQL
@@ -133,11 +138,12 @@ After=docker.service
 Requires=docker.service
 
 [Service]
+Type=oneshot
+RemainAfterExit=yes
 User=govql
 WorkingDirectory=/opt/govql/us-congress
-ExecStart=dotenvx run -- docker compose up
+ExecStart=/opt/govql/us-congress/deploy/up.sh
 ExecStop=docker compose down
-Restart=always
 
 [Install]
 WantedBy=multi-user.target
@@ -239,9 +245,12 @@ ENABLE_GRAPHIQL=true
 
 ### 8. Start the stack
 
+The droplet never builds — it pulls the SHA-tagged images CI pushed for the
+checked-out commit:
+
 ```bash
 cd /opt/govql/us-congress
-dotenvx run -- docker compose up --build -d
+deploy/up.sh --pull
 ```
 
 The API is live at `https://api.govql.us/graphql` and the site at `https://govql.us`.
@@ -261,57 +270,47 @@ docker exec us-congress-scraper-1 /usr/local/bin/usc-run votes
 docker exec us-congress-ingester-1 sh -c "node /app/src/ingest-legislators.js && node /app/src/ingest-votes.js"
 ```
 
-## Deploying changes to Docusaurus site
+## Deploying changes (one-click)
+
+Every change — code, schema, docs site — ships through the same pipeline; the
+droplet never builds:
+
+1. **Merge to `main`.** CI builds the four images and pushes them to GHCR
+   tagged with the commit SHA (`.github/workflows/us-congress.yml`).
+2. **Approve the deploy.** The `deploy` job waits on the GitHub `production`
+   environment's required reviewer — Slack pings when it's waiting. One click
+   in the Actions run releases it.
+3. **The droplet swaps the stack.** The job SSHes in as the unprivileged
+   `govql` user (deploy-only key, pinned host key), checks out the merged
+   commit, and runs `deploy/up.sh --pull`: pull the SHA-tagged images,
+   `docker compose up -d`. Flyway applies any pending `db/migrations/V*.sql`
+   on the way up, then the API server re-introspects the schema. Docs-site
+   changes ride along — the Docusaurus build is baked into the `nginx` image.
+4. **The outcome is recorded.** Slack reports success or failure with the SHA
+   and a run link, and the run appears as a GitHub deployment on the
+   `production` environment.
+
+Because all four images are retagged every deploy, all four containers are
+recreated together — nginx re-resolves the `server` container's IP on start,
+so the stale-IP 502 that manual partial restarts could cause doesn't apply to
+a pipeline deploy. If you ever bounce `server` by hand, follow it with
+`docker compose restart nginx`.
+
+**Removing the approval gate** (graduating to continuous deployment): delete
+the required reviewer from the `production` environment (repo Settings →
+Environments → production). That one setting is the whole gate — no workflow
+change needed.
+
+**Manual/emergency deploy** — the same thing the CI job runs:
 
 ```bash
-# Should act as govql user
 sudo -u govql -i
+cd /opt/govql
+git fetch origin && git checkout --detach <sha>
+us-congress/deploy/up.sh --pull
 ```
-
-To get the changes for the site:
-
-```bash
-# Make sure we're in the right place
-cd /opt/govql/us-congress/docs
-# Make sure we're on the main branch
-git checkout main
-# Pull the latest changes
-git pull
-```
-
-To deploy changes to the Docusaurus site, simply run the build command and restart the stack:
-
-```bash
-cd /opt/govql/us-congress/docs
-npm run build
-cd /opt/govql/us-congress
-# We don't need to rebuild the Docker compose stack, just restart nginx
-# We don't even need dotenvx since nginx doesn't need environment variables
-docker compose restart nginx
-```
-
-## Deploying schema changes
-
-Schema changes ship like any other change — the `flyway` service applies pending migrations on `up`:
-
-```bash
-sudo -u govql -i
-cd /opt/govql/us-congress
-git checkout main && git pull
-dotenvx run -- docker compose up -d --build
-```
-
-Flyway runs the new `db/migrations/V*.sql`, then the API server restarts and re-introspects the schema. If the change touched documented tables, also rebuild the docs site (see [Deploying changes to Docusaurus site](#deploying-changes-to-docusaurus-site)).
 
 > **First time only:** this production database predates Flyway, so run the one-time `baseline` (see [Adopting Flyway on an existing database](#adopting-flyway-on-an-existing-database-one-time)) **before** the first `up` that includes the `flyway` service — otherwise Flyway would try to recreate the existing schema and fail.
-
-> **502 after the deploy?** If the `up` **recreated** the `server` container (e.g. the postgres container was also recreated, which chains a server recreate), nginx may still be proxying to the old container's IP — it resolves the `server` hostname at startup and caches it. The fix is to bounce nginx so it re-resolves:
->
-> ```bash
-> docker compose restart nginx
-> ```
->
-> A routine schema-only deploy that merely restarts `server` in place won't usually trigger this; a deploy that *recreates* `server` (container config change, image rebuild, or a postgres recreate) will.
 
 ## Hardening against probing
 
