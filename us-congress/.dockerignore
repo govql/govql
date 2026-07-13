@@ -1,0 +1,16 @@
+# Applies to builds whose context is the us-congress/ root (scraper, nginx).
+# Keep host-only and generated artifacts out of the build context so image
+# builds are reproducible from source (npm ci provides deps; docs are built
+# inside the image, not copied from a host build).
+**/node_modules
+docs/build
+**/.git
+**/.DS_Store
+
+# Never ship key material into a build context that produces public images.
+# (.env itself is dotenvx-encrypted ciphertext and safe; .env.keys holds the
+# decryption keys and must never enter an image or leave the box.)
+.env.keys
+**/*.pem
+**/*.key
+certs/
