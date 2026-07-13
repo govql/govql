@@ -39,6 +39,11 @@ test('the built digests travel from the images job to the deploy job', () => {
   const imagesSteps = workflow.jobs.images.steps;
   const upload = imagesSteps.find((s) => /upload-artifact/.test(s.uses ?? ''));
   assert.ok(upload, 'images uploads a digest artifact per matrix leg');
+  assert.equal(upload.with.overwrite, true, 'a re-run of the same sha must not 409 on the artifact');
+  assert.ok(
+    upload.with['retention-days'] >= 30,
+    'digests must outlive the 30-day environment approval window'
+  );
   assert.match(
     imagesSteps.map((s) => s.run ?? '').join('\n'),
     /steps\.build\.outputs\.digest/,
@@ -77,7 +82,7 @@ test('CI reads no application secrets — deploy key, Slack webhook, GITHUB_TOKE
   }
 });
 
-test('Slack is pinged on awaiting-approval, success, and failure with sha + run link', () => {
+test('Slack is pinged on awaiting-approval and on every deploy outcome, with sha + run link', () => {
   const slackStep = (s) => /SLACK_WEBHOOK_URL/.test(JSON.stringify(s));
   const carriesShaAndLink = (s) => {
     const text = JSON.stringify(s);
@@ -86,26 +91,37 @@ test('Slack is pinged on awaiting-approval, success, and failure with sha + run 
   };
 
   // Awaiting approval: must fire before the gate, so it lives in its own job
-  // outside the production environment.
+  // outside the production environment. It waits on the tests too — a failed
+  // test job skips the deploy, and a ping for a deploy that will never wait
+  // at the gate is a false announcement.
   const pending = workflow.jobs['notify-pending'];
   assert.ok(pending, 'workflow has a notify-pending job');
-  assert.equal(pending.needs, 'images', 'pending ping waits for the build');
+  assert.deepEqual(pending.needs, ['images', 'test'], 'pending ping waits for build and tests');
   assert.equal(pending.if, "github.event_name == 'push'", 'pending ping only fires for real deploys');
   assert.equal(pending.environment, undefined, 'pending ping is not blocked by the approval gate');
   const pendingStep = pending.steps.find(slackStep);
   assert.ok(pendingStep, 'notify-pending posts to Slack');
   carriesShaAndLink(pendingStep);
+  assert.equal(pendingStep['continue-on-error'], true, 'a Slack outage cannot fail the job');
 
-  // Success, failure, and concurrency-cancellation: steps inside the deploy
-  // job. Every outcome pings — a superseded queued deploy must not vanish.
-  const outcomes = workflow.jobs.deploy.steps.filter(slackStep);
-  const byIf = Object.fromEntries(outcomes.map((s) => [s.if, s]));
-  for (const cond of ['success()', 'failure()', 'cancelled()']) {
-    assert.ok(byIf[cond], `deploy posts to Slack on ${cond}`);
-    carriesShaAndLink(byIf[cond]);
+  // Outcomes report from a follow-up job, not steps inside deploy: a deploy
+  // cancelled before it starts (superseded in the concurrency group, or
+  // rejected at the gate) never runs its steps, so only a needs:-dependent
+  // job with an always() condition can report it.
+  const outcome = workflow.jobs['notify-outcome'];
+  assert.ok(outcome, 'workflow has a notify-outcome job');
+  assert.deepEqual(outcome.needs, ['deploy'], 'outcome job watches the deploy');
+  assert.match(outcome.if, /always\(\)/, 'runs even when deploy failed or was cancelled');
+  assert.equal(outcome.environment, undefined, 'not blocked by the approval gate');
+  assert.equal(outcome['continue-on-error'], true, 'a Slack outage cannot fail the run');
+  const outcomeStep = outcome.steps.find(slackStep);
+  assert.ok(outcomeStep, 'notify-outcome posts to Slack');
+  carriesShaAndLink(outcomeStep);
+  assert.match(JSON.stringify(outcome), /needs\.deploy\.result/, 'message keyed on the deploy result');
+  for (const result of ['success', 'failure', 'cancelled']) {
+    assert.match(outcomeStep.run, new RegExp(result), `handles ${result}`);
   }
-  // A Slack outage must not fail (or mis-report) a deploy that succeeded.
-  for (const step of [...outcomes, pendingStep]) {
-    assert.equal(step['continue-on-error'], true, `${step.name} cannot fail the job`);
-  }
+  // No outcome pings inside deploy itself — they'd be skipped in exactly the
+  // cases the follow-up job exists for.
+  assert.equal(workflow.jobs.deploy.steps.filter(slackStep).length, 0, 'deploy has no Slack steps');
 });

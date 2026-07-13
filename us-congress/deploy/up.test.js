@@ -23,8 +23,12 @@ function runUp(args = []) {
   mkdirSync(deployDir, { recursive: true });
 
   // A real git repo so `git rev-parse HEAD` yields a genuine commit sha.
+  // Hermetic git: ignore the developer's global/system config (gpg signing, …).
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
   const git = (...a) =>
-    execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a]);
+    execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], {
+      env: gitEnv,
+    });
   git('init', '-q');
   writeFileSync(join(repo, 'f'), 'x');
   git('add', 'f');

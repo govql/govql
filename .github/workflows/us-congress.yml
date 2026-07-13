@@ -98,7 +98,12 @@ jobs:
         with:
           name: digest-${{ matrix.name }}
           path: digest-${{ matrix.name }}.txt
-          retention-days: 7
+          # overwrite: a "Re-run all jobs" re-uploads the same artifact name
+          # and would otherwise 409 — and re-running is the CI path to
+          # redeploying the current sha. 90 days: an environment approval can
+          # arrive up to 30 days after the run; the digests must outlive it.
+          overwrite: true
+          retention-days: 90
 
   # The deploy invariant tests (us-congress/deploy) and the ingester suite.
   # deploy waits on this job, so a PR that breaks an invariant — dropping the
@@ -119,8 +124,10 @@ jobs:
   # the production environment — a job inside it would itself wait on the
   # approval — which is why SLACK_WEBHOOK_URL is a repo-level secret, not an
   # environment secret. GitHub's native environment notification also fires.
+  # Waits on the tests too: if they fail, the deploy is skipped and never
+  # waits at the gate, so announcing it would be a false ping.
   notify-pending:
-    needs: images
+    needs: [images, test]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
@@ -156,8 +163,6 @@ jobs:
     environment:
       name: production
       url: https://govql.us
-    env:
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Set up the deploy key and pinned host key
         env:
@@ -192,34 +197,32 @@ jobs:
             "govql@$DROPLET_HOST" \
             "$TARGET_SHA" < digests.txt
 
-      - name: Notify Slack — success
-        if: success()
-        continue-on-error: true
+  # Report the deploy's outcome to Slack from a follow-up job, not steps in
+  # deploy itself: a deploy cancelled before it starts (superseded in the
+  # concurrency group, or rejected at the approval gate) never runs its
+  # steps, so only a needs:-dependent job with always() can report it.
+  # Skipped deploys (a failed test job) are deliberately quiet — no pending
+  # ping was sent for them either.
+  notify-outcome:
+    needs: [deploy]
+    if: >-
+      always() && github.event_name == 'push' &&
+      contains(fromJSON('["success", "failure", "cancelled"]'), needs.deploy.result)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RESULT: ${{ needs.deploy.result }}
+    steps:
+      - name: Notify Slack — deploy outcome
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          case "$RESULT" in
+            success)   text="✅ govql production deploy succeeded" ;;
+            failure)   text="❌ govql production deploy FAILED (or was rejected at the gate)" ;;
+            cancelled) text="⚪ govql production deploy cancelled (superseded or stopped)" ;;
+          esac
           curl -fsS -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"✅ govql production deploy succeeded: ${GITHUB_SHA} — ${RUN_URL}\"}" \
-            "$SLACK_WEBHOOK_URL"
-
-      - name: Notify Slack — failure
-        if: failure()
-        continue-on-error: true
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -fsS -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"❌ govql production deploy FAILED: ${GITHUB_SHA} — ${RUN_URL}\"}" \
-            "$SLACK_WEBHOOK_URL"
-
-      # A queued deploy superseded before it ran (concurrency group) must not
-      # vanish from Slack after its "awaiting approval" ping.
-      - name: Notify Slack — cancelled
-        if: cancelled()
-        continue-on-error: true
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -fsS -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"⚪ govql production deploy cancelled (superseded or stopped): ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            --data "{\"text\":\"${text}: ${GITHUB_SHA} — ${RUN_URL}\"}" \
             "$SLACK_WEBHOOK_URL"

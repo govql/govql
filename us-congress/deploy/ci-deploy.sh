@@ -20,6 +20,13 @@ if ! git rev-parse --verify --quiet "${sha}^{commit}" >/dev/null; then
   exit 1
 fi
 
+# Only commits that made it onto main deploy — a valid sha on an unmerged
+# branch must not get its deploy.sh executed.
+if ! git merge-base --is-ancestor "$sha" origin/main; then
+  echo "ci-deploy: refusing ${sha} — not reachable from origin/main" >&2
+  exit 1
+fi
+
 # Refuse silent rollbacks: approving an older queued run after a newer one
 # already deployed must not downgrade production. (Task 0007 adds an explicit
 # rollback path.)
