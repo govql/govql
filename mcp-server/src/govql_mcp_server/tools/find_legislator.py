@@ -33,6 +33,7 @@ query FindLegislator($filter: LegislatorFilter, $first: Int) {
         party
         state
         termType
+        district
         endDate
       }
     }
@@ -55,6 +56,7 @@ def _shape(node: dict[str, Any]) -> dict[str, Any]:
         "party": latest.get("party"),
         "state": latest.get("state"),
         "chamber": _CHAMBER_DISPLAY.get(latest.get("termType")),
+        "district": latest.get("district"),
         "current": bool(end and end > today_iso()),
     }
 
@@ -76,6 +78,11 @@ async def find_legislator(
     chamber: Annotated[
         str | None, Field(description="'house'/'h' or 'senate'/'s'."),
     ] = None,
+    district: Annotated[
+        int | None, Field(description="House district number (e.g. 3). House-only "
+                                     "(senators have none); at-large districts are 0. "
+                                     "Pair with state."),
+    ] = None,
     current_only: Annotated[
         bool, Field(description="Only members currently serving (a term ending in "
                               "the future). Default true."),
@@ -86,18 +93,26 @@ async def find_legislator(
 ) -> dict[str, Any]:
     """Find legislators by attributes when you don't know a bioguide id.
 
-    Party/state/chamber are matched against the member's *terms* (party is
-    per-term, not on the legislator). `current_only` (default) restricts to
-    members whose latest term ends in the future. Returns a compact ranked
-    list — pass a returned `bioguideId` to `get_legislator` for full detail.
+    A locator: give it a name and/or state/party/chamber/district and it returns
+    matching members with their bioguide id and a compact snapshot of their
+    latest term (name, party, state, chamber, district). Identity search only —
+    it does NOT return committee membership, tenure, or voting behavior (and the
+    committees/bills tables aren't populated). For voting data or a full term
+    history, query `execute_graphql` directly.
 
-    Each result displays the member's *latest* term (party/state/chamber).
-    With `current_only=False` the term that matched a historical search may
-    differ from the one displayed (e.g. a member who changed party or seat) —
-    use `get_legislator` for the full term history. `total_matches` is how many
-    members match the filter overall (it can exceed the number returned — raise
-    `limit` or refine the filter to see more); `truncated` is true if the
-    response-size guard trimmed the returned list.
+    - `name` is a case-insensitive substring matched across first/last/official-
+      full/nickname.
+    - `party`/`state`/`chamber`/`district` match the member's *terms* (party is
+      per-term, not on the legislator). `district` is House-only (senators have
+      none) and at-large districts are 0 — pair `district` with `state`, since
+      district numbers repeat across states.
+    - `current_only` (default) restricts to members whose latest term ends in the
+      future; set false to include past members (the term that matched a
+      historical search may then differ from the latest term shown).
+
+    `total_matches` is how many members match the filter overall (it can exceed
+    the number returned — refine the filter or raise `limit`); `truncated` is
+    true if the response-size guard trimmed the returned list.
     """
     try:
         term_facets: dict[str, Any] = {}
@@ -107,6 +122,8 @@ async def find_legislator(
             term_facets["party"] = {"equalTo": normalize_party(party)}
         if chamber is not None:
             term_facets["termType"] = {"equalTo": normalize_chamber_termtype(chamber)}
+        if district is not None:
+            term_facets["district"] = {"equalTo": district}
         if current_only:
             term_facets["endDate"] = {"greaterThan": today_iso()}
     except ValueError as err:

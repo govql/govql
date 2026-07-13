@@ -107,3 +107,39 @@ async def test_limit_is_clamped_to_max(client, mock_graphql, govql_endpoint):
     await client.call_tool("find_legislator", {"limit": 9999})
 
     assert _last_variables(route)["first"] == 500
+
+
+_AZ_REP = {
+    "allLegislators": {
+        "totalCount": 1,
+        "nodes": [
+            {
+                "bioguideId": "A000381", "firstName": "Yassamin",
+                "lastName": "Ansari", "officialFull": "Yassamin Ansari",
+                "legislatorTermsByBioguideIdList": [
+                    {"party": "Democrat", "state": "AZ", "termType": "rep",
+                     "district": 3, "endDate": "2027-01-03"}
+                ],
+            },
+        ]
+    }
+}
+
+
+async def test_district_search_filters_and_returns_district(client, mock_graphql, govql_endpoint):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_AZ_REP)
+    )
+
+    result = await client.call_tool(
+        "find_legislator", {"state": "AZ", "district": 3}
+    )
+
+    some = _last_variables(route)["filter"]["legislatorTermsByBioguideId"]["some"]
+    assert some["state"]["equalTo"] == "AZ"
+    assert some["district"]["equalTo"] == 3
+    rep = tool_payload(result)["data"]["legislators"][0]
+    assert rep["bioguideId"] == "A000381"
+    assert rep["district"] == 3
+    assert rep["chamber"] == "House"
+    assert result.is_error is False

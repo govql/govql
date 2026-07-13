@@ -61,15 +61,25 @@ async def find_vote(
                                      "Newest first."),
     ] = None,
 ) -> dict[str, Any]:
-    """Find roll-call votes by topic/chamber/congress/category.
+    """Find roll-call votes by category, chamber, or congress — newest first.
 
-    Searches the vote `question` text for `topic`; results are newest-first.
-    Returns a compact list — pass a returned `voteId` to
-    `get_vote_with_positions` for tallies and member positions.
+    The reliable path is browsing by facets: filter by `category`
+    ('nomination', 'passage', 'cloture', 'amendment', ...), `chamber`, and/or
+    `congress`, newest-first (e.g. "the most recent Senate nomination votes").
+
+    `topic` is a case-insensitive keyword match over the vote's `question` text.
+    The question usually includes the bill's short title, so keyword search
+    works for named bills and common terms — but it is NOT a subject index:
+    procedural, cloture, and motion-to-proceed votes carry only the bill number,
+    and bill subject data isn't populated yet, so `topic` will MISS many on-topic
+    votes. Don't rely on it for "every vote about X."
+
+    Pass a returned `voteId` into an `execute_graphql` query for tallies and
+    member positions.
 
     `total_matches` is how many votes match the filter overall (it can exceed
-    the number returned — raise `limit` or refine the filter to see more).
-    `truncated` is true if the response-size guard trimmed the returned list.
+    the number returned — raise `limit` or refine the filter). `truncated` is
+    true if the response-size guard trimmed the returned list.
     """
     try:
         chamber_code = normalize_chamber_code(chamber)
