@@ -113,10 +113,6 @@ ufw enable
 # Docker
 curl -fsSL https://get.docker.com | sh
 
-# Node.js (needed to build the Docusaurus site)
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt install -y nodejs
-
 # Create a dedicated user and give it Docker access
 adduser --disabled-password --gecos "" govql
 usermod -aG docker govql
@@ -150,6 +146,18 @@ WantedBy=multi-user.target
 EOF
 
 systemctl enable govql
+
+# Authorize the CI deploy key for the govql user. The operator generates the
+# keypair (ed25519, no passphrase); the private half lives only in the GitHub
+# `production` environment secret DEPLOY_SSH_KEY. The forced command means the
+# key can do exactly one thing — hand a commit sha to deploy/ci-deploy.sh,
+# which validates it, refuses rollbacks, checks it out, and deploys it with
+# digest verification. `restrict` disables forwarding, PTY, etc.
+sudo -u govql bash -c '
+  mkdir -p ~/.ssh && chmod 700 ~/.ssh
+  echo "command=\"/opt/govql/us-congress/deploy/ci-deploy.sh\",restrict ssh-ed25519 AAAA_PUBLIC_KEY_HERE govql-deploy-ci" >> ~/.ssh/authorized_keys
+  chmod 600 ~/.ssh/authorized_keys
+'
 
 # Disable root SSH login — verify you can still SSH in as nate first!
 # Test with: ssh nate@YOUR_DROPLET_IP (in a separate terminal before running this)
@@ -227,15 +235,7 @@ mkdir -p /opt/govql/certs/live/govql.us
 
 acme.sh auto-installs a renewal cron job — no further setup needed.
 
-### 6. Build the Docusaurus site
-
-```bash
-cd /opt/govql/us-congress/docs
-npm install
-npm run build
-```
-
-### 7. Set ENABLE_GRAPHIQL
+### 6. Set ENABLE_GRAPHIQL
 
 In `/opt/govql/us-congress/.env`, set:
 
@@ -243,7 +243,7 @@ In `/opt/govql/us-congress/.env`, set:
 ENABLE_GRAPHIQL=true
 ```
 
-### 8. Start the stack
+### 7. Start the stack
 
 The droplet never builds — it pulls the SHA-tagged images CI pushed for the
 checked-out commit:
@@ -255,7 +255,7 @@ deploy/up.sh --pull
 
 The API is live at `https://api.govql.us/graphql` and the site at `https://govql.us`.
 
-### 9. Populate the database
+### 8. Populate the database
 
 The scrapers and ingesters run on cron schedules, so on a fresh deployment you need to trigger the initial run manually:
 
@@ -281,11 +281,16 @@ droplet never builds:
    environment's required reviewer — Slack pings when it's waiting. One click
    in the Actions run releases it.
 3. **The droplet swaps the stack.** The job SSHes in as the unprivileged
-   `govql` user (deploy-only key, pinned host key), checks out the merged
-   commit, and runs `deploy/up.sh --pull`: pull the SHA-tagged images,
-   `docker compose up -d`. Flyway applies any pending `db/migrations/V*.sql`
-   on the way up, then the API server re-introspects the schema. Docs-site
-   changes ride along — the Docusaurus build is baked into the `nginx` image.
+   `govql` user with the deploy-only key (pinned host key, strict checking).
+   The key's forced command — `deploy/ci-deploy.sh` — is the only thing it
+   can run: it validates the sha, refuses rollbacks to an ancestor of what's
+   deployed, checks the commit out, and hands off to `deploy/deploy.sh`,
+   which pulls the four SHA-tagged app images and **refuses to start unless
+   their digests match what CI just built** (GHCR tags are mutable; digests
+   are not). Then `docker compose up -d`: Flyway applies any pending
+   `db/migrations/V*.sql`, and the API server re-introspects the schema.
+   Docs-site changes ride along — the Docusaurus build is baked into the
+   `nginx` image.
 4. **The outcome is recorded.** Slack reports success or failure with the SHA
    and a run link, and the run appears as a GitHub deployment on the
    `production` environment.

@@ -17,9 +17,11 @@ const workflow = yaml.load(raw);
 test('deploy job waits on the images build and the production environment gate', () => {
   const deploy = workflow.jobs.deploy;
   assert.ok(deploy, 'workflow has a deploy job');
-  assert.equal(deploy.needs, 'images', 'deploy depends on the images build');
+  assert.ok([].concat(deploy.needs).includes('images'), 'deploy depends on the images build');
   assert.equal(deploy.environment?.name, 'production', 'deploy is gated on the production environment');
-  assert.match(deploy.if ?? '', /push/, 'deploy runs only on push to main, never on PRs');
+  assert.equal(deploy.if, "github.event_name == 'push'", 'deploy runs only on push, never on PRs');
+  // The "to main" half of the gate lives in the trigger, not the job condition.
+  assert.deepEqual(workflow.on.push.branches, ['main'], 'push trigger is filtered to main');
 });
 
 test('deploy SSHes as the unprivileged govql user with a pinned host key', () => {
@@ -27,8 +29,41 @@ test('deploy SSHes as the unprivileged govql user with a pinned host key', () =>
   assert.match(raw, /vars\.DROPLET_HOST_KEY/, 'host key comes from the pinned environment variable');
   assert.match(runs, /StrictHostKeyChecking=yes/, 'strict host-key checking is on');
   assert.match(runs, /govql@/, 'connects as the govql user, not root');
-  assert.match(runs, /git checkout --detach/, 'checks out the exact pushed commit');
-  assert.match(runs, /up\.sh --pull/, 'delegates to the shared up.sh tag-derivation path');
+  // The remote side is the forced command (ci-deploy.sh): the ssh command is
+  // nothing but the target sha, and the built digests ride in on stdin.
+  assert.match(runs, /"\$TARGET_SHA"\s*<\s*digests\.txt/, 'sends only the sha, digests on stdin');
+  assert.doesNotMatch(runs, /git checkout|up\.sh|deploy\.sh/, 'no remote script inline — the forced command owns it');
+});
+
+test('the built digests travel from the images job to the deploy job', () => {
+  const imagesSteps = workflow.jobs.images.steps;
+  const upload = imagesSteps.find((s) => /upload-artifact/.test(s.uses ?? ''));
+  assert.ok(upload, 'images uploads a digest artifact per matrix leg');
+  assert.match(
+    imagesSteps.map((s) => s.run ?? '').join('\n'),
+    /steps\.build\.outputs\.digest/,
+    'the recorded digest is the one the build step reported'
+  );
+  const download = workflow.jobs.deploy.steps.find((s) => /download-artifact/.test(s.uses ?? ''));
+  assert.ok(download, 'deploy downloads the digest artifacts');
+});
+
+test('CI runs the invariant tests and deploy waits on them', () => {
+  const testJob = workflow.jobs.test;
+  assert.ok(testJob, 'workflow has a test job');
+  const runs = testJob.steps.map((s) => s.run ?? '').join('\n');
+  assert.match(runs, /us-congress\/deploy/, 'runs the deploy invariant tests');
+  assert.match(runs, /us-congress\/ingester/, 'runs the ingester tests');
+  assert.deepEqual(workflow.jobs.deploy.needs, ['images', 'test'], 'deploy waits on build and tests');
+});
+
+test('packages: write is scoped to the images job, not PR-triggered jobs at large', () => {
+  assert.equal(workflow.permissions?.packages, undefined, 'no workflow-level packages permission');
+  assert.equal(workflow.jobs.images.permissions?.packages, 'write', 'images job pushes');
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name === 'images') continue;
+    assert.equal(job.permissions?.packages, undefined, `${name} cannot write packages`);
+  }
 });
 
 test('CI reads no application secrets — deploy key, Slack webhook, GITHUB_TOKEN only', () => {
@@ -55,17 +90,22 @@ test('Slack is pinged on awaiting-approval, success, and failure with sha + run 
   const pending = workflow.jobs['notify-pending'];
   assert.ok(pending, 'workflow has a notify-pending job');
   assert.equal(pending.needs, 'images', 'pending ping waits for the build');
-  assert.match(pending.if ?? '', /push/, 'pending ping only fires for real deploys');
+  assert.equal(pending.if, "github.event_name == 'push'", 'pending ping only fires for real deploys');
   assert.equal(pending.environment, undefined, 'pending ping is not blocked by the approval gate');
   const pendingStep = pending.steps.find(slackStep);
   assert.ok(pendingStep, 'notify-pending posts to Slack');
   carriesShaAndLink(pendingStep);
 
-  // Success and failure: steps inside the deploy job.
+  // Success, failure, and concurrency-cancellation: steps inside the deploy
+  // job. Every outcome pings — a superseded queued deploy must not vanish.
   const outcomes = workflow.jobs.deploy.steps.filter(slackStep);
   const byIf = Object.fromEntries(outcomes.map((s) => [s.if, s]));
-  assert.ok(byIf['success()'], 'deploy posts to Slack on success');
-  assert.ok(byIf['failure()'], 'deploy posts to Slack on failure');
-  carriesShaAndLink(byIf['success()']);
-  carriesShaAndLink(byIf['failure()']);
+  for (const cond of ['success()', 'failure()', 'cancelled()']) {
+    assert.ok(byIf[cond], `deploy posts to Slack on ${cond}`);
+    carriesShaAndLink(byIf[cond]);
+  }
+  // A Slack outage must not fail (or mis-report) a deploy that succeeded.
+  for (const step of [...outcomes, pendingStep]) {
+    assert.equal(step['continue-on-error'], true, `${step.name} cannot fail the job`);
+  }
 });

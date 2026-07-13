@@ -22,9 +22,12 @@ test('the systemd unit in the README is a one-shot delegating to up.sh', () => {
   assert.doesNotMatch(unit, /Restart=always/, 'crash recovery belongs to compose, not systemd');
 });
 
-test('every app service has compose restart: always (what one-shot relies on)', () => {
+test('every service has compose restart: always (what one-shot relies on)', () => {
   const compose = yaml.load(readFileSync(join(HERE, '..', 'compose.yml'), 'utf8'));
-  for (const name of ['scraper', 'ingester', 'server', 'nginx']) {
-    assert.equal(compose.services[name]?.restart, 'always', `${name} restarts on crash`);
+  // Run-to-completion services are the only exceptions.
+  const runToCompletion = new Set(['flyway']);
+  for (const [name, service] of Object.entries(compose.services)) {
+    if (runToCompletion.has(name)) continue;
+    assert.equal(service.restart, 'always', `${name} restarts on crash`);
   }
 });

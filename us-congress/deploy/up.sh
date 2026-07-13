@@ -15,7 +15,9 @@ IMAGE_TAG="$(git rev-parse HEAD)"
 export IMAGE_TAG
 
 if [[ "${1:-}" == "--pull" ]]; then
-  dotenvx run -- docker compose pull
+  # Only the SHA-tagged app images — an unscoped pull would also re-resolve
+  # the floating third-party tags (vector, pdc-agent) on every deploy.
+  dotenvx run -- docker compose pull scraper ingester server nginx
 fi
 
 dotenvx run -- docker compose up -d

@@ -41,8 +41,11 @@ function runUp(args = []) {
   writeFileSync(join(bin, 'dotenvx'), `#!/bin/sh\necho "IMAGE_TAG=$IMAGE_TAG dotenvx $@" >> '${log}'\n`);
   chmodSync(join(bin, 'dotenvx'), 0o755);
 
+  // HOME points into the sandbox: up.sh re-prepends $HOME/.local/bin to PATH
+  // (where dotenvx really lives on the droplet), which would otherwise beat
+  // the stub on any machine with dotenvx installed.
   execFileSync(join(deployDir, 'up.sh'), args, {
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...process.env, HOME: sandbox, PATH: `${bin}:${process.env.PATH}` },
   });
   return { sha, log: readFileSync(log, 'utf8').trim().split('\n') };
 }
@@ -52,10 +55,13 @@ test('up.sh brings the stack up detached, pinned to the checked-out commit', () 
   assert.deepEqual(log, [`IMAGE_TAG=${sha} dotenvx run -- docker compose up -d`]);
 });
 
-test('up.sh --pull pulls the pinned images before bringing the stack up', () => {
+test('up.sh --pull pulls only the pinned app images before bringing the stack up', () => {
+  // Only the four SHA-tagged app services: an unscoped pull would also
+  // re-resolve the floating third-party tags (vector, pdc-agent), silently
+  // upgrading them on every deploy.
   const { sha, log } = runUp(['--pull']);
   assert.deepEqual(log, [
-    `IMAGE_TAG=${sha} dotenvx run -- docker compose pull`,
+    `IMAGE_TAG=${sha} dotenvx run -- docker compose pull scraper ingester server nginx`,
     `IMAGE_TAG=${sha} dotenvx run -- docker compose up -d`,
   ]);
 });

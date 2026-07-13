@@ -15,13 +15,18 @@ on:
       - 'us-congress/**'
       - '.github/workflows/us-congress.yml'
 
+# Deliberately minimal: packages: write is granted job-level to `images` only,
+# so a PR-triggered run of any other job never carries a token that could
+# overwrite GHCR tags.
 permissions:
   contents: read
-  packages: write
 
 jobs:
   images:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +73,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -77,6 +83,37 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # GHCR tags are mutable; the digest is not. Record what was actually
+      # built so the deploy job can have the droplet verify the pulled images
+      # are byte-for-byte these — a tag overwritten between build and approval
+      # is refused on-box (deploy/deploy.sh).
+      - name: Record image digest
+        if: github.event_name == 'push'
+        run: echo "${{ matrix.name }} ${{ steps.build.outputs.digest }}" > "digest-${{ matrix.name }}.txt"
+
+      - name: Upload image digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}
+          path: digest-${{ matrix.name }}.txt
+          retention-days: 7
+
+  # The deploy invariant tests (us-congress/deploy) and the ingester suite.
+  # deploy waits on this job, so a PR that breaks an invariant — dropping the
+  # approval gate, referencing a new secret — fails before anything ships.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Deploy invariant tests
+        run: cd us-congress/deploy && npm ci && npm test
+      - name: Ingester tests
+        run: cd us-congress/ingester && npm ci && npm test
 
   # Announce that a deploy is waiting for its one-click approval. Runs outside
   # the production environment — a job inside it would itself wait on the
@@ -90,6 +127,7 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Notify Slack — awaiting approval
+        continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -100,13 +138,15 @@ jobs:
   # Deploy: released by a one-click approval on the GitHub `production`
   # environment (required reviewer = the manual gate; remove the reviewer in
   # the environment settings to graduate to continuous deployment). SSHes to
-  # the droplet as the unprivileged govql user, checks out the pushed commit,
-  # and swaps the stack to its SHA-tagged images via deploy/up.sh --pull.
+  # the droplet as the unprivileged govql user; the deploy key's forced
+  # command (deploy/ci-deploy.sh) validates the sha, checks it out, and runs
+  # deploy/deploy.sh, which pulls the SHA-tagged app images and refuses to
+  # start unless their digests match what the build job reported (stdin).
   # The `environment:` key records each run as a GitHub deployment for the
   # audit trail. CI holds no application secrets — only the deploy key and
   # the Slack webhook; app secrets stay on the droplet in dotenvx.
   deploy:
-    needs: images
+    needs: [images, test]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Serialize deploys so two quick merges can't interleave on the droplet.
@@ -129,24 +169,32 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$DROPLET_HOST_KEY" > ~/.ssh/known_hosts
 
+      - name: Collect built image digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+
       - name: Deploy over SSH
         env:
           DROPLET_HOST: ${{ vars.DROPLET_HOST }}
           TARGET_SHA: ${{ github.sha }}
+        # The remote side is the key's forced command (deploy/ci-deploy.sh):
+        # the command is nothing but the target sha, and the expected digests
+        # ride in on stdin. The key can do nothing else.
         run: |
+          cat digests/*.txt > digests.txt
           ssh -i ~/.ssh/deploy_key \
             -o IdentitiesOnly=yes \
             -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
             -o StrictHostKeyChecking=yes \
             "govql@$DROPLET_HOST" \
-            "set -euo pipefail
-             cd /opt/govql
-             git fetch origin
-             git checkout --detach '$TARGET_SHA'
-             exec us-congress/deploy/up.sh --pull"
+            "$TARGET_SHA" < digests.txt
 
       - name: Notify Slack — success
         if: success()
+        continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -156,9 +204,22 @@ jobs:
 
       - name: Notify Slack — failure
         if: failure()
+        continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           curl -fsS -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"❌ govql production deploy FAILED: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
+
+      # A queued deploy superseded before it ran (concurrency group) must not
+      # vanish from Slack after its "awaiting approval" ping.
+      - name: Notify Slack — cancelled
+        if: cancelled()
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"⚪ govql production deploy cancelled (superseded or stopped): ${GITHUB_SHA} — ${RUN_URL}\"}" \
             "$SLACK_WEBHOOK_URL"
