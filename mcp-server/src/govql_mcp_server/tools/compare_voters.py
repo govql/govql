@@ -26,10 +26,10 @@ query CompareVoters($a: String!, $b: String!, $filter: VoteSimilarityFilter) {
 @mcp.tool
 async def compare_voters(
     bioguide_id_a: Annotated[
-        str, Field(description="First member's bioguide id."),
+        str, Field(description="First member's bioguide id (from find_legislator)."),
     ],
     bioguide_id_b: Annotated[
-        str, Field(description="Second member's bioguide id."),
+        str, Field(description="Second member's bioguide id (from find_legislator)."),
     ],
     congress: Annotated[
         int | None, Field(description="Restrict to one congress. Omit for every "
