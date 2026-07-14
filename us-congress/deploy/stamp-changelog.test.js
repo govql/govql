@@ -117,6 +117,45 @@ test('second deploy on the same day → new entries merge into the existing date
   );
 });
 
+test('same-day merge folds entries under an existing category heading', () => {
+  const input = [
+    '## [Unreleased]',
+    '',
+    '### Added',
+    '',
+    '- New entry. (#101)',
+    '',
+    '## [2026-07-13]',
+    '',
+    '### Added',
+    '',
+    '- First entry. (#100)',
+    '',
+    '## [2026-06-25]',
+    '',
+  ].join('\n');
+
+  const { text, changed } = stampChangelog(input, '2026-07-13');
+
+  assert.equal(changed, true);
+  assert.equal(
+    text,
+    [
+      '## [Unreleased]',
+      '',
+      '## [2026-07-13]',
+      '',
+      '### Added',
+      '',
+      '- New entry. (#101)',
+      '- First entry. (#100)',
+      '',
+      '## [2026-06-25]',
+      '',
+    ].join('\n')
+  );
+});
+
 test('duplicate Unreleased headings → only the first is stamped', () => {
   const input = [
     '## [Unreleased]',

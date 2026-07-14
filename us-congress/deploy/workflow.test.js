@@ -116,6 +116,13 @@ test('the changelog is stamped before the docs image build, on deploys only', ()
   // stamped state, not re-stamp old entries with the re-run date.
   assert.match(stamp.run, /git fetch .*origin main/, 'stamp fetches main');
   assert.match(stamp.run, /git restore --source=FETCH_HEAD .*CHANGELOG\.md/, 'stamps main’s copy');
+  // Only a tip deploy stamps: a redeploy of an older sha must not assign
+  // today's date to Unreleased entries whose code is not in this image.
+  assert.match(
+    stamp.run,
+    /if \[ "\$\(git rev-parse FETCH_HEAD\)" = "\$GITHUB_SHA" \]/,
+    'the stamp is gated on this sha being main’s tip'
+  );
 
   // The stamped file travels to the commit-back job by artifact, so main
   // receives exactly the bytes the image published — not a re-stamp whose

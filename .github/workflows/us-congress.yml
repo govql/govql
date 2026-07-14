@@ -73,7 +73,16 @@ jobs:
           git fetch --depth=1 origin main
           git restore --source=FETCH_HEAD -- us-congress/CHANGELOG.md
           cp us-congress/CHANGELOG.md changelog-input.md
-          node us-congress/deploy/stamp-changelog-run.js
+          # Only a tip deploy stamps. A re-run of an older sha (the redeploy
+          # path) publishes main's already-stamped state untouched — stamping
+          # there would assign today's date to Unreleased entries whose code
+          # is not in this image. Unstamped means input == output, so
+          # commit-changelog naturally has nothing to commit.
+          if [ "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" ]; then
+            node us-congress/deploy/stamp-changelog-run.js
+          else
+            echo "this sha is not main's tip — publishing main's changelog unstamped"
+          fi
 
       # Hand commit-changelog the exact stamped bytes (a re-stamp there could
       # drift a day if the approval gate spans midnight in Chicago) plus the
@@ -322,9 +331,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # If the changelog moved on main since the stamp was taken (e.g. a
-          # changelog-only merge during the approval gate), overwriting it
-          # would silently drop those entries. Skip — loudly, since the deploy
-          # shipped healthy but main stays unstamped until the next deploy.
+          # changelog-only merge during the approval gate, or a prior queued
+          # deploy's stamp landing first), overwriting it would silently drop
+          # those entries. Skip — loudly, since the deploy shipped healthy but
+          # main stays unstamped. Known limitation, accepted: the skip
+          # self-heals at the next deploy, which re-stamps whatever Unreleased
+          # then holds — with a later date if that deploy crosses midnight.
           if ! diff -q stamped/changelog-input.md us-congress/CHANGELOG.md > /dev/null; then
             echo "::warning::changelog changed on main since the stamp was taken — commit-back skipped; the deploy shipped but main stays unstamped until the next deploy"
             curl -fsS -X POST -H 'Content-type: application/json' \
