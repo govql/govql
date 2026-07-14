@@ -8,7 +8,7 @@
 
 **Tech Stack:** PostgreSQL 18, Flyway 12.9 (one-shot `flyway migrate` service in `us-congress/compose.yml`), PostGraphile v5. No application code.
 
-**Spec:** [docs/superpowers/specs/2026-07-09-vote-similarity-legislator-fks-design.md](../specs/2026-07-09-vote-similarity-legislator-fks-design.md)
+**Spec:** [plans/superpowers/specs/2026-07-09-vote-similarity-legislator-fks-design.md](../specs/2026-07-09-vote-similarity-legislator-fks-design.md)
 
 ## Global Constraints
 

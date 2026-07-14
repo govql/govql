@@ -17,3 +17,9 @@ certs/
 
 # Ephemeral, branch-scoped task-review output (task-review skill) — never commit
 reviews/
+
+# Superpowers' hardcoded default output dir. Committed plans/specs live under
+# plans/superpowers/ (see AGENTS.md); this guard keeps a pre-v5.0 Superpowers
+# from silently recreating a root docs/ and re-breaking the on-box deploy
+# (issue #85). Anchored to root, so us-congress/docs/ (Docusaurus) is untouched.
+/docs/
