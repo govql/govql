@@ -17,6 +17,15 @@ architectural header plus an ordered list of task pointers (task bodies in
 OpenCode. New work is appended by the `to-plan` workflow; it never creates a
 second plan.
 
+**Planning-tool artifacts (Superpowers etc.) go under `plans/`, never
+a root `docs/`.** Superpowers defaults to writing plans and specs into
+`docs/superpowers/{plans,specs}`, but a new top-level `docs/` at the repo root
+broke the on-box deploy (the `govql` user can't create a new entry at the root of
+`/opt/govql` — issue #85). Superpowers v5.0+ honors project instructions over its
+own defaults, so: **save Superpowers plans to `plans/superpowers/plans/` and specs to
+`plans/superpowers/specs/`.** A `.gitignore` guard (`/docs/`) backstops any
+pre-v5.0 client that ignores this.
+
 ## Repository map
 
 - **`us-congress/`** — US Congress roll-call vote data, served as a GraphQL API

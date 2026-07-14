@@ -185,6 +185,22 @@ git fetch origin && git checkout --detach <sha>
 us-congress/deploy/up.sh --pull
 ```
 
+**Deploy fails: `cannot create directory at '<path>': Permission denied`.** The
+checkout (`git checkout --detach`) runs as `govql` inside `/opt/govql`. If a
+commit introduces a **new top-level directory** and `/opt/govql`'s root isn't
+writable by `govql`, git can't create it and the deploy aborts (issue #85 —
+a stray root `docs/` triggered it). Repo hygiene keeps planning-tool output out
+of a root `docs/` (see [`AGENTS.md`](../AGENTS.md)), but the durable fix is to
+make the whole checkout `govql`-owned so any future top-level path deploys
+cleanly. As `root` (or via `sudo`) on the droplet:
+
+```bash
+# Confirm the culprit — root dir owned by root, not govql:
+ls -ld /opt/govql
+# Remediate: take ownership of the tree, then retry the deploy.
+chown -R govql:govql /opt/govql
+```
+
 ### Enabling another operator
 
 Approving a deploy needs nothing on the droplet: no SSH access, no secrets, no
