@@ -6,9 +6,23 @@
 # stable: the deploy logic itself is versioned with the code it deploys.
 set -euo pipefail
 
-sha="${SSH_ORIGINAL_COMMAND:-}"
+# Two accepted forms in SSH_ORIGINAL_COMMAND, nothing else:
+#   <sha>            normal deploy — refuses ancestor rollbacks, digests on stdin
+#   rollback <sha>   explicit rollback / on-demand redeploy (task 0007) — bypasses
+#                    the ancestor guard and skips digest verification (the images
+#                    were built by a prior run; the human production-approval gate
+#                    is the trust boundary for this break-glass path).
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+rollback=""
+if [[ "$cmd" == rollback\ * ]]; then
+  rollback=1
+  sha="${cmd#rollback }"
+else
+  sha="$cmd"
+fi
+
 if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "ci-deploy: expected a 40-hex commit sha, got: ${sha}" >&2
+  echo "ci-deploy: expected a 40-hex commit sha, got: ${cmd}" >&2
   exit 1
 fi
 
@@ -28,13 +42,20 @@ if ! git merge-base --is-ancestor "$sha" origin/main; then
 fi
 
 # Refuse silent rollbacks: approving an older queued run after a newer one
-# already deployed must not downgrade production. (Task 0007 adds an explicit
-# rollback path.)
-current="$(git rev-parse HEAD)"
-if [[ "$sha" != "$current" ]] && git merge-base --is-ancestor "$sha" "$current"; then
-  echo "ci-deploy: refusing rollback — ${sha} is an ancestor of deployed ${current}" >&2
-  exit 1
+# already deployed must not downgrade production. The explicit `rollback <sha>`
+# form (task 0007) is the sanctioned bypass — it is the only way an ancestor
+# deploys, so the default stays safe.
+if [[ -z "$rollback" ]]; then
+  current="$(git rev-parse HEAD)"
+  if [[ "$sha" != "$current" ]] && git merge-base --is-ancestor "$sha" "$current"; then
+    echo "ci-deploy: refusing rollback — ${sha} is an ancestor of deployed ${current}" >&2
+    exit 1
+  fi
 fi
 
 git checkout --detach "$sha"
-exec us-congress/deploy/deploy.sh
+if [[ -n "$rollback" ]]; then
+  exec us-congress/deploy/deploy.sh --rollback
+else
+  exec us-congress/deploy/deploy.sh
+fi
