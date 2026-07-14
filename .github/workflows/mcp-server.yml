@@ -12,6 +12,28 @@ on:
       - '.github/workflows/mcp-server.yml'
 
 jobs:
+  # Lint + format gate. Separate from `test` so the two failure modes report
+  # distinctly and run in parallel; the small duplicate `uv sync` is cheap given
+  # the cache. Ruff config (rules, line length, target-version) lives in
+  # pyproject.toml under [tool.ruff].
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version-file: mcp-server/.python-version
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     defaults:

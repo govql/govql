@@ -5,7 +5,7 @@ description = "MCP server for GovQL — query US Congressional data via GraphQL 
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 authors = [{ name = "GovQL" }]
 keywords = ["mcp", "model-context-protocol", "graphql", "government", "congress", "ai"]
 classifiers = [
@@ -13,6 +13,8 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
@@ -33,6 +35,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
+    "ruff>=0.9",
 ]
 
 [build-system]
@@ -45,3 +48,16 @@ packages = ["src/govql_mcp_server"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+# Lint against the *minimum* supported version (requires-python floor), not the
+# 3.14 dev pin, so pyupgrade never suggests syntax that breaks a supported
+# interpreter.
+target-version = "py313"
+
+[tool.ruff.lint]
+# Balanced starter set: pycodestyle errors/warnings (E/W), pyflakes dead-code
+# (F), import sorting (I), pyupgrade modern-syntax (UP), flake8-bugbear
+# likely-bug patterns (B). Tighten later as the codebase grows.
+select = ["E", "F", "W", "I", "UP", "B"]
