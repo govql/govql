@@ -9,10 +9,15 @@ on:
     branches: [main]
     paths:
       - 'us-congress/**'
+      # The commit-changelog job pushes the stamped changelog back to main.
+      # Its built-in GITHUB_TOKEN never triggers workflow runs; this exclusion
+      # is the secondary guard against a re-deploy loop.
+      - '!us-congress/CHANGELOG.md'
       - '.github/workflows/us-congress.yml'
   pull_request:
     paths:
       - 'us-congress/**'
+      - '!us-congress/CHANGELOG.md'
       - '.github/workflows/us-congress.yml'
 
 # Deliberately minimal: packages: write is granted job-level to `images` only,
@@ -45,6 +50,29 @@ jobs:
             dockerfile: us-congress/nginx/Dockerfile
     steps:
       - uses: actions/checkout@v5
+
+      # Stamp the changelog's Unreleased section with today's America/Chicago
+      # date before the nginx image bakes the docs site, so the published site
+      # carries the date within the same deploy. Working-copy only — nothing
+      # reaches main unless the deploy proves healthy (commit-changelog).
+      - uses: actions/setup-node@v4
+        if: matrix.name == 'nginx' && github.event_name == 'push'
+        with:
+          node-version: 24
+      - name: Stamp changelog Unreleased section
+        if: matrix.name == 'nginx' && github.event_name == 'push'
+        run: node us-congress/deploy/stamp-changelog-run.js
+
+      # Hand the exact stamped bytes to commit-changelog: a re-stamp there
+      # could drift a day if the approval gate spans midnight in Chicago.
+      - name: Upload stamped changelog
+        if: matrix.name == 'nginx' && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stamped-changelog
+          path: us-congress/CHANGELOG.md
+          overwrite: true
+          retention-days: 90
 
       # A docker-container builder is required for the gha cache backend below
       # (the runner's default `docker` driver can't export a cache).
@@ -244,3 +272,52 @@ jobs:
           curl -fsS -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"${text}: ${GITHUB_SHA} — ${RUN_URL}\"}" \
             "$SLACK_WEBHOOK_URL"
+
+  # Commit the stamped changelog back to main, but only after the deploy —
+  # health check included — succeeded; a failed deploy discards the stamp.
+  # The artifact carries the exact bytes the published docs image was built
+  # from. The push uses the built-in GITHUB_TOKEN (left in .git/config by
+  # checkout), whose pushes never trigger workflow runs — the primary guard
+  # against a re-deploy loop; the trigger's paths exclusion is the backstop.
+  commit-changelog:
+    needs: [deploy]
+    if: github.event_name == 'push' && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Check out the current tip of main, not the deployed sha: main may
+      # have advanced during the approval gate, and the push must fast-forward.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Download stamped changelog
+        uses: actions/download-artifact@v4
+        with:
+          name: stamped-changelog
+          path: stamped
+
+      - name: Commit the stamp to main
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          git fetch --depth=1 origin "$TARGET_SHA"
+          # If the changelog changed on main since the deployed sha (e.g. a
+          # changelog-only merge during the approval gate), overwriting it
+          # with the artifact would silently drop those entries. Skip loudly
+          # instead — the next deploy stamps whatever Unreleased then holds.
+          if ! git diff --quiet "$TARGET_SHA" HEAD -- us-congress/CHANGELOG.md; then
+            echo "changelog changed on main since $TARGET_SHA — skipping commit-back"
+            exit 0
+          fi
+          mv stamped/CHANGELOG.md us-congress/CHANGELOG.md
+          if git diff --quiet -- us-congress/CHANGELOG.md; then
+            echo "Unreleased was empty — nothing was stamped, nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add us-congress/CHANGELOG.md
+          git commit -m "docs(us-congress): stamp changelog for deploy $TARGET_SHA"
+          git push origin HEAD:main

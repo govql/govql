@@ -100,6 +100,61 @@ test('CI reads no application secrets — deploy key, Slack webhook, GITHUB_TOKE
   }
 });
 
+test('the changelog is stamped before the docs image build, on deploys only', () => {
+  const imagesSteps = workflow.jobs.images.steps;
+  const stampIndex = imagesSteps.findIndex((s) => /stamp-changelog-run\.js/.test(s.run ?? ''));
+  const buildIndex = imagesSteps.findIndex((s) => /build-push-action/.test(s.uses ?? ''));
+  assert.ok(stampIndex !== -1, 'images job stamps the changelog');
+  assert.ok(buildIndex !== -1, 'images job builds via build-push-action');
+  assert.ok(stampIndex < buildIndex, 'stamp runs before the build so the published site carries the date');
+  const stamp = imagesSteps[stampIndex];
+  assert.match(stamp.if ?? '', /matrix\.name == 'nginx'/, 'stamp runs only for the docs image leg');
+  assert.match(stamp.if ?? '', /github\.event_name == 'push'/, 'PR builds are never stamped');
+
+  // The stamped file travels to the commit-back job by artifact, so main
+  // receives exactly the bytes the image published — not a re-stamp whose
+  // date could drift if the approval gate spans midnight in Chicago.
+  const upload = imagesSteps.find(
+    (s) => /upload-artifact/.test(s.uses ?? '') && /CHANGELOG\.md/.test(s.with?.path ?? '')
+  );
+  assert.ok(upload, 'the stamped changelog is uploaded as an artifact');
+  assert.match(upload.if ?? '', /matrix\.name == 'nginx'/, 'uploaded once, from the stamped leg');
+  assert.ok(
+    upload.with['retention-days'] >= 30,
+    'must outlive the 30-day environment approval window'
+  );
+  assert.equal(upload.with.overwrite, true, 'a re-run of the same sha must not 409 on the artifact');
+});
+
+test('the stamped changelog is committed back to main only after a healthy deploy', () => {
+  const job = workflow.jobs['commit-changelog'];
+  assert.ok(job, 'workflow has a commit-changelog job');
+  assert.deepEqual(job.needs, ['deploy'], 'waits on the deploy');
+  assert.match(
+    job.if,
+    /needs\.deploy\.result == 'success'/,
+    'runs only when the deploy — health check included — succeeded'
+  );
+  assert.doesNotMatch(job.if, /always\(\)|failure\(\)/, 'a failed deploy discards the stamp');
+  assert.equal(job.permissions?.contents, 'write', 'pushing to main needs contents: write');
+  assert.equal(job.environment, undefined, 'not gated on a second approval');
+  const stepsText = JSON.stringify(job.steps);
+  assert.match(stepsText, /download-artifact/, 'commits the artifact the image was built from');
+  assert.match(stepsText, /git push/, 'pushes the stamp back to main');
+  // The built-in GITHUB_TOKEN is the primary loop guard: its pushes never
+  // trigger workflow runs. No PAT or app token may sneak in here.
+  assert.doesNotMatch(stepsText, /secrets\./, 'uses only the built-in token from checkout');
+});
+
+test('a changelog-only commit does not trigger the pipeline (secondary loop guard)', () => {
+  for (const event of ['push', 'pull_request']) {
+    assert.ok(
+      workflow.on[event].paths.includes('!us-congress/CHANGELOG.md'),
+      `${event} paths filter excludes the changelog`
+    );
+  }
+});
+
 test('Slack is pinged on awaiting-approval and on every deploy outcome, with sha + run link', () => {
   const slackStep = (s) => /SLACK_WEBHOOK_URL/.test(JSON.stringify(s));
   const carriesShaAndLink = (s) => {
