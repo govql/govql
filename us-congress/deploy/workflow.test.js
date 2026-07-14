@@ -116,13 +116,17 @@ test('the changelog is stamped before the docs image build, on deploys only', ()
   // stamped state, not re-stamp old entries with the re-run date.
   assert.match(stamp.run, /git fetch .*origin main/, 'stamp fetches main');
   assert.match(stamp.run, /git restore --source=FETCH_HEAD .*CHANGELOG\.md/, 'stamps main’s copy');
-  // Only a tip deploy stamps: a redeploy of an older sha must not assign
-  // today's date to Unreleased entries whose code is not in this image.
+  // The stamp only runs when the changelog blob is identical between the
+  // deployed sha and main's tip: a redeploy of an older sha (main's copy was
+  // stamped since) must not assign today's date to entries whose code is not
+  // in this image, while a race with a non-changelog merge stamps through.
+  // A skip must be visible, not a silent unstamped publish.
   assert.match(
     stamp.run,
-    /if \[ "\$\(git rev-parse FETCH_HEAD\)" = "\$GITHUB_SHA" \]/,
-    'the stamp is gated on this sha being main’s tip'
+    /"\$\(git rev-parse FETCH_HEAD:us-congress\/CHANGELOG\.md\)" = "\$\(git rev-parse "\$GITHUB_SHA:us-congress\/CHANGELOG\.md"\)"/,
+    'the stamp is gated on changelog-blob equality with main’s tip'
   );
+  assert.match(stamp.run, /::warning::/, 'a skipped stamp annotates the run');
 
   // The stamped file travels to the commit-back job by artifact, so main
   // receives exactly the bytes the image published — not a re-stamp whose

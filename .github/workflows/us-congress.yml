@@ -73,15 +73,16 @@ jobs:
           git fetch --depth=1 origin main
           git restore --source=FETCH_HEAD -- us-congress/CHANGELOG.md
           cp us-congress/CHANGELOG.md changelog-input.md
-          # Only a tip deploy stamps. A re-run of an older sha (the redeploy
-          # path) publishes main's already-stamped state untouched — stamping
-          # there would assign today's date to Unreleased entries whose code
-          # is not in this image. Unstamped means input == output, so
-          # commit-changelog naturally has nothing to commit.
-          if [ "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" ]; then
+          # Stamp only when the changelog blob is identical between this sha
+          # and main's tip. A redeploy of an older sha (main's copy was
+          # stamped since) or a raced changelog merge must not assign today's
+          # date to entries whose code is not in this image; a race with a
+          # non-changelog merge stamps through. Unstamped means input ==
+          # output, so commit-changelog naturally has nothing to commit.
+          if [ "$(git rev-parse FETCH_HEAD:us-congress/CHANGELOG.md)" = "$(git rev-parse "$GITHUB_SHA:us-congress/CHANGELOG.md")" ]; then
             node us-congress/deploy/stamp-changelog-run.js
           else
-            echo "this sha is not main's tip — publishing main's changelog unstamped"
+            echo "::warning::changelog differs between this sha and main's tip — publishing main's copy unstamped (redeploy of an older sha, or a changelog merge raced this run)"
           fi
 
       # Hand commit-changelog the exact stamped bytes (a re-stamp there could

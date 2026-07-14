@@ -56,7 +56,11 @@ export function stampChangelog(text, date) {
     const existing = parseCategoryBlocks(lines.slice(nextHeadingIndex + 1, dateSectionEnd));
     const standalone = [];
     for (const block of fresh) {
-      const match = block.heading && existing.find((b) => b.heading === block.heading);
+      // Case-insensitive: '### added' must fold into '### Added' (the
+      // existing casing wins) — case variants slugify to the same docs anchor.
+      const match =
+        block.heading &&
+        existing.find((b) => b.heading?.toLowerCase() === block.heading.toLowerCase());
       if (match) match.lines = [...trimBlankEdges(block.lines), ...trimBlankEdges(match.lines)];
       else standalone.push(block);
     }
