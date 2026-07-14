@@ -11,6 +11,13 @@ on:
       - 'mcp-server/**'
       - '.github/workflows/mcp-server.yml'
 
+# Least privilege: lint + test only need to read the repo. Declaring any
+# permissions block denies every scope not listed, so a PR-triggered run
+# carries no writable token. Jobs that need more (e.g. a release publish)
+# escalate per-job or in their own workflow.
+permissions:
+  contents: read
+
 jobs:
   # Lint + format gate. Separate from `test` so the two failure modes report
   # distinctly and run in parallel; the small duplicate `uv sync` is cheap given
