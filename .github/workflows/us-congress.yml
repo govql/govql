@@ -165,7 +165,12 @@ jobs:
       url: https://govql.us
     steps:
       # For the post-deploy health-check poller (deploy/health-check-run.js).
+      # persist-credentials off: this job holds the production deploy key, and
+      # the checkout is read-only — no reason to leave the GITHUB_TOKEN in
+      # .git/config for later steps.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24

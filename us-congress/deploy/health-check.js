@@ -43,8 +43,11 @@ export function createCheck({ docsUrl, apiUrl, fetch, requestTimeoutMs = 10_000 
     return body.data != null && !body.errors;
   };
   const guard = (probe) => probe().catch(() => false);
-  return async () => ({
-    docs: await guard(docsGreen),
-    api: await guard(apiGreen),
-  });
+  // Probe both targets concurrently: a round costs the slower probe, not the
+  // sum — with both stalled at the abort timeout that's twice the rounds in
+  // the same window.
+  return async () => {
+    const [docs, api] = await Promise.all([guard(docsGreen), guard(apiGreen)]);
+    return { docs, api };
+  };
 }
