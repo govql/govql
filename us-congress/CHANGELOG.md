@@ -32,6 +32,8 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## [2026-07-14]
+
 ### Added
 
 - **Legislator relations on `vote_similarity`**: `member_a` and `member_b` now have foreign keys to
