@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Thin wrapper around the poller core (health-check.js): real fetch, real
 // clock, per-round progress on stdout, and the process exit code as the
 // verdict — a non-zero exit fails the deploy job, which drives the existing
