@@ -314,3 +314,44 @@ test('Slack is pinged on awaiting-approval and on every deploy outcome, with sha
   // cases the follow-up job exists for.
   assert.equal(workflow.jobs.deploy.steps.filter(slackStep).length, 0, 'deploy has no Slack steps');
 });
+
+test('every pinned action meets its node24-runtime minimum major (guard against node20 removal)', () => {
+  // An action's declared runtime (`using:` in its OWN action.yml) is what the
+  // runner deprecates — independent of the `node-version` the jobs install for
+  // their npm work. These minima are the first major of each action whose
+  // action.yml declares `using: node24`, verified against each release's
+  // action.yml. Pinning below one reintroduces a "Node.js 20 is deprecated"
+  // annotation and breaks once node20 is removed from runners (Sept 16 2026).
+  const MIN_MAJOR = {
+    'actions/checkout': 5,
+    'actions/setup-node': 5,
+    'actions/upload-artifact': 6,
+    'actions/download-artifact': 7,
+    'docker/setup-buildx-action': 4,
+    'docker/login-action': 4,
+    'docker/metadata-action': 6,
+    'docker/build-push-action': 7,
+  };
+  const uses = Object.values(workflow.jobs)
+    .flatMap((j) => j.steps ?? [])
+    .map((s) => s.uses)
+    .filter(Boolean);
+  assert.ok(uses.length > 0, 'the workflow pins at least one action');
+  for (const u of uses) {
+    const [name, tag] = u.split('@');
+    // Official node-runtime actions are the ones the node20 removal touches; a
+    // newly added one must be tracked here with its node24 minimum, not slip in
+    // below it. Third-party/container actions are out of scope for this guard.
+    if (!(name.startsWith('actions/') || name.startsWith('docker/'))) continue;
+    assert.ok(
+      name in MIN_MAJOR,
+      `${name} is an official action with no tracked node24 minimum — add it to MIN_MAJOR`
+    );
+    const major = Number.parseInt(String(tag).replace(/^v/, ''), 10);
+    assert.ok(Number.isInteger(major), `${u} is not pinned to a major version tag`);
+    assert.ok(
+      major >= MIN_MAJOR[name],
+      `${u} is below its node24-runtime minimum (@v${MIN_MAJOR[name]}) — node20-runtime pins are deprecated`
+    );
+  }
+});

@@ -80,7 +80,7 @@ jobs:
       # redeploy path) must publish main's already-stamped state, not re-stamp
       # old entries with the re-run date. Working-copy only — nothing reaches
       # main unless the deploy proves healthy (commit-changelog).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: matrix.name == 'nginx' && github.event_name == 'push'
         with:
           node-version: 24
@@ -107,7 +107,7 @@ jobs:
       # pre-stamp input its concurrent-edit guard diffs against.
       - name: Upload stamped changelog
         if: matrix.name == 'nginx' && github.event_name == 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: stamped-changelog
           path: |
@@ -119,12 +119,12 @@ jobs:
       # A docker-container builder is required for the gha cache backend below
       # (the runner's default `docker` driver can't export a cache).
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Only needed to push (merges to main); PRs build without credentials.
       - name: Log in to GHCR
         if: github.event_name == 'push'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -132,7 +132,7 @@ jobs:
 
       - name: Derive image tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/govql/us-congress-${{ matrix.name }}
           # Full 40-char commit SHA as the tag (prefix stripped) so the on-box
@@ -151,7 +151,7 @@ jobs:
       # the current + previous SHA set. Full runbook: task 0008.)
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload image digest
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: digest-${{ matrix.name }}
           path: digest-${{ matrix.name }}.txt
@@ -189,7 +189,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - name: Deploy invariant tests
@@ -260,7 +260,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
 
@@ -306,7 +306,7 @@ jobs:
       # Only a fresh build produces digest artifacts; a dispatch has none.
       - name: Collect built image digests
         if: github.event_name == 'push'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: digest-*
           merge-multiple: true
@@ -399,7 +399,7 @@ jobs:
           ref: main
 
       - name: Download stamped changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: stamped-changelog
           path: stamped
