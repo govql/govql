@@ -55,7 +55,10 @@ The `us-congress` Postgres schema is managed with **Flyway**.
 - **Deploying (one-click):** every change ships by merge to `main` → CI builds
   SHA-tagged images → a one-click approval on the GitHub `production`
   environment → the droplet checks out the commit and runs
-  `us-congress/deploy/deploy.sh` (pull + digest verify + `up -d`). Never run a
+  `us-congress/deploy/deploy.sh` (pull + digest verify + `up -d`) → CI probes
+  the live docs site and GraphQL API from outside (retrying ~2 min,
+  `us-congress/deploy/health-check-run.js`) — that external health check is the
+  deploy verdict Slack reports, not just "containers started". Never run a
   bare `docker compose up` on the droplet — compose resolves `${IMAGE_TAG}` to
   `latest` without the scripts; the manual path is
   `us-congress/deploy/up.sh --pull`. Schema changes ride along: the gated
