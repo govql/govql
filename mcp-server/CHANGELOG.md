@@ -4,6 +4,12 @@ All notable changes to `govql-mcp-server` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Minimum supported Python raised to 3.13 (drops 3.10–3.12).
+
 ## [0.1.1] — 2026-07-03
 
 ### Changed
