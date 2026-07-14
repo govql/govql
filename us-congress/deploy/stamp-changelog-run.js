@@ -14,7 +14,13 @@ const changelogPath =
 // en-CA formats as ISO-style YYYY-MM-DD, the changelog's heading format.
 const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
 
-const { text, changed } = stampChangelog(readFileSync(changelogPath, 'utf8'), date);
+const { text, changed, reason } = stampChangelog(readFileSync(changelogPath, 'utf8'), date);
+if (reason === 'no-heading') {
+  // A missing/reworded heading must fail the build, not read as the routine
+  // empty no-op — otherwise entries silently accumulate unstamped forever.
+  console.error(`changelog stamp: no "## [Unreleased]" heading found in ${changelogPath}`);
+  process.exit(1);
+}
 if (!changed) {
   console.log(`changelog stamp: Unreleased is empty in ${changelogPath} — nothing to stamp`);
 } else {

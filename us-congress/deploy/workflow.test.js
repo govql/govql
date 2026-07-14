@@ -111,13 +111,21 @@ test('the changelog is stamped before the docs image build, on deploys only', ()
   assert.match(stamp.if ?? '', /matrix\.name == 'nginx'/, 'stamp runs only for the docs image leg');
   assert.match(stamp.if ?? '', /github\.event_name == 'push'/, 'PR builds are never stamped');
 
+  // The stamp input is main's current changelog, not this sha's copy: a
+  // re-run of an old sha (the redeploy path) must publish main's already-
+  // stamped state, not re-stamp old entries with the re-run date.
+  assert.match(stamp.run, /git fetch .*origin main/, 'stamp fetches main');
+  assert.match(stamp.run, /git restore --source=FETCH_HEAD .*CHANGELOG\.md/, 'stamps main’s copy');
+
   // The stamped file travels to the commit-back job by artifact, so main
   // receives exactly the bytes the image published — not a re-stamp whose
-  // date could drift if the approval gate spans midnight in Chicago.
+  // date could drift if the approval gate spans midnight in Chicago. The
+  // pre-stamp input rides along for the concurrent-edit guard to diff.
   const upload = imagesSteps.find(
     (s) => /upload-artifact/.test(s.uses ?? '') && /CHANGELOG\.md/.test(s.with?.path ?? '')
   );
   assert.ok(upload, 'the stamped changelog is uploaded as an artifact');
+  assert.match(upload.with.path, /changelog-input/, 'the pre-stamp input is uploaded too');
   assert.match(upload.if ?? '', /matrix\.name == 'nginx'/, 'uploaded once, from the stamped leg');
   assert.ok(
     upload.with['retention-days'] >= 30,
@@ -142,15 +150,54 @@ test('the stamped changelog is committed back to main only after a healthy deplo
   assert.match(stepsText, /download-artifact/, 'commits the artifact the image was built from');
   assert.match(stepsText, /git push/, 'pushes the stamp back to main');
   // The built-in GITHUB_TOKEN is the primary loop guard: its pushes never
-  // trigger workflow runs. No PAT or app token may sneak in here.
-  assert.doesNotMatch(stepsText, /secrets\./, 'uses only the built-in token from checkout');
+  // trigger workflow runs. No PAT or app token may sneak in here — the only
+  // secret this job may touch is the Slack webhook for the skip warning.
+  const secretRefs = [...stepsText.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
+  assert.deepEqual(
+    [...new Set(secretRefs)],
+    ['SLACK_WEBHOOK_URL'],
+    'the push rides the built-in token from checkout; only the Slack webhook is referenced'
+  );
+
+  const runText = job.steps.map((s) => s.run ?? '').join('\n');
+  // The concurrent-edit guard diffs main against the pre-stamp input the
+  // artifact carried, and a skip must be loud: the deploy shipped healthy
+  // but main stays unstamped until the next deploy.
+  assert.match(runText, /changelog-input/, 'guard compares main against the stamped input');
+  assert.match(runText, /::warning::/, 'a skipped commit-back annotates the run');
+  assert.match(runText, /SLACK_WEBHOOK_URL/, 'a skipped commit-back pings Slack');
+  // A merge landing between checkout and push must not strand the stamp.
+  assert.match(runText, /git pull --rebase origin main/, 'push retries once after a rebase');
 });
 
-test('a changelog-only commit does not trigger the pipeline (secondary loop guard)', () => {
+test('the bot stamp commit cannot re-trigger the pipeline (secondary loop guard)', () => {
+  // Primary guard: the commit-back push rides the built-in GITHUB_TOKEN,
+  // whose pushes never trigger workflow runs. Backstop: the images job skips
+  // runs whose head commit is the stamp commit — and everything that could
+  // loop (deploy, docs publish) needs images — so the guard holds even if
+  // that push token is ever swapped for a PAT.
+  const guard = workflow.jobs.images.if ?? '';
+  const prefix = guard.match(/!startsWith\(github\.event\.head_commit\.message, '([^']+)'\)/);
+  assert.ok(prefix, 'images job skips on the stamp commit-message prefix');
+  assert.match(guard, /github\.event_name == 'pull_request'/, 'PRs (no head_commit) still build');
+  assert.ok([].concat(workflow.jobs.deploy.needs).includes('images'), 'skipping images kills the deploy');
+
+  // The guarded prefix must be the message commit-changelog actually writes,
+  // or the backstop is inert.
+  const commitRun = workflow.jobs['commit-changelog'].steps.map((s) => s.run ?? '').join('\n');
+  const message = commitRun.match(/git commit -m "([^"]+)"/);
+  assert.ok(message, 'commit-changelog commits with an inline message');
+  assert.ok(
+    message[1].startsWith(prefix[1]),
+    `commit message "${message[1]}" carries the guarded prefix "${prefix[1]}"`
+  );
+
+  // No paths negation: it would also stop human changelog-only merges from
+  // republishing the docs site, and strand changelog-only PRs with no CI.
   for (const event of ['push', 'pull_request']) {
     assert.ok(
-      workflow.on[event].paths.includes('!us-congress/CHANGELOG.md'),
-      `${event} paths filter excludes the changelog`
+      !workflow.on[event].paths.some((p) => p.startsWith('!')),
+      `${event} paths filter has no negation`
     );
   }
 });

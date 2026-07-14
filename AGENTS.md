@@ -58,7 +58,14 @@ The `us-congress` Postgres schema is managed with **Flyway**.
   `us-congress/deploy/deploy.sh` (pull + digest verify + `up -d`) → CI probes
   the live docs site and GraphQL API from outside (retrying ~2 min,
   `us-congress/deploy/health-check-run.js`) — that external health check is the
-  deploy verdict Slack reports, not just "containers started". Never run a
+  deploy verdict Slack reports, not just "containers started". After a healthy
+  deploy, CI stamps `us-congress/CHANGELOG.md`'s `Unreleased` section with the
+  America/Chicago date and commits it back to `main` (`commit-changelog` job).
+  Two loop guards keep that commit from re-deploying, and **both are
+  load-bearing**: the push uses the built-in `GITHUB_TOKEN` (its pushes never
+  trigger workflows), and the `images` job skips runs whose head commit starts
+  with `docs(us-congress): stamp changelog` — the message prefix, the guard,
+  and `workflow.test.js` pin each other; change them together. Never run a
   bare `docker compose up` on the droplet — compose resolves `${IMAGE_TAG}` to
   `latest` without the scripts; the manual path is
   `us-congress/deploy/up.sh --pull`. Schema changes ride along: the gated

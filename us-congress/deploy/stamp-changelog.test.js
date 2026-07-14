@@ -20,18 +20,30 @@ test('empty Unreleased → no-op', () => {
     '',
   ].join('\n');
 
-  const { text, changed } = stampChangelog(input, '2026-07-13');
+  const { text, changed, reason } = stampChangelog(input, '2026-07-13');
 
   assert.equal(changed, false);
+  assert.equal(reason, 'empty');
   assert.equal(text, input);
 });
 
-test('no Unreleased heading → no-op', () => {
+test('no Unreleased heading → no-op with a no-heading reason', () => {
   const input = ['# Changelog', '', '## [2026-06-25]', '', '- An old field.', ''].join('\n');
 
-  const { text, changed } = stampChangelog(input, '2026-07-13');
+  const { text, changed, reason } = stampChangelog(input, '2026-07-13');
 
   assert.equal(changed, false);
+  assert.equal(reason, 'no-heading');
+  assert.equal(text, input);
+});
+
+test('near-miss heading (no brackets) is not recognized → no-op with a no-heading reason', () => {
+  const input = ['## Unreleased', '', '- An entry under a malformed heading.', ''].join('\n');
+
+  const { text, changed, reason } = stampChangelog(input, '2026-07-13');
+
+  assert.equal(changed, false);
+  assert.equal(reason, 'no-heading');
   assert.equal(text, input);
 });
 
@@ -53,6 +65,53 @@ test('populated Unreleased as the last section → stamped at end of file', () =
       '### Added',
       '',
       '- First ever entry.',
+      '',
+    ].join('\n')
+  );
+});
+
+test('second deploy on the same day → new entries merge into the existing date section', () => {
+  const input = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '### Fixed',
+    '',
+    '- Second entry of the day. (#101)',
+    '',
+    '## [2026-07-13]',
+    '',
+    '### Added',
+    '',
+    '- First entry of the day. (#100)',
+    '',
+    '## [2026-06-25]',
+    '',
+  ].join('\n');
+
+  const { text, changed, reason } = stampChangelog(input, '2026-07-13');
+
+  assert.equal(changed, true);
+  assert.equal(reason, 'stamped');
+  assert.equal(
+    text,
+    [
+      '# Changelog',
+      '',
+      '## [Unreleased]',
+      '',
+      '## [2026-07-13]',
+      '',
+      '### Fixed',
+      '',
+      '- Second entry of the day. (#101)',
+      '',
+      '### Added',
+      '',
+      '- First entry of the day. (#100)',
+      '',
+      '## [2026-06-25]',
       '',
     ].join('\n')
   );

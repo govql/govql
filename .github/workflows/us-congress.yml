@@ -9,15 +9,10 @@ on:
     branches: [main]
     paths:
       - 'us-congress/**'
-      # The commit-changelog job pushes the stamped changelog back to main.
-      # Its built-in GITHUB_TOKEN never triggers workflow runs; this exclusion
-      # is the secondary guard against a re-deploy loop.
-      - '!us-congress/CHANGELOG.md'
       - '.github/workflows/us-congress.yml'
   pull_request:
     paths:
       - 'us-congress/**'
-      - '!us-congress/CHANGELOG.md'
       - '.github/workflows/us-congress.yml'
 
 # Deliberately minimal: packages: write is granted job-level to `images` only,
@@ -29,6 +24,16 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
+    # Secondary guard against a stamp→deploy loop: skip runs whose head commit
+    # is commit-changelog's stamp commit. The primary guard is that the
+    # built-in GITHUB_TOKEN's pushes never trigger workflow runs at all; this
+    # backstop holds even if that push token were ever swapped for a PAT.
+    # Everything that could loop (deploy, docs publish) needs this job, so
+    # skipping it kills the run. workflow.test.js pins the prefix to the
+    # message commit-changelog writes — change them together.
+    if: >-
+      github.event_name == 'pull_request' ||
+      !startsWith(github.event.head_commit.message, 'docs(us-congress): stamp changelog')
     permissions:
       contents: read
       packages: write
@@ -53,24 +58,34 @@ jobs:
 
       # Stamp the changelog's Unreleased section with today's America/Chicago
       # date before the nginx image bakes the docs site, so the published site
-      # carries the date within the same deploy. Working-copy only — nothing
-      # reaches main unless the deploy proves healthy (commit-changelog).
+      # carries the date within the same deploy. The stamp input is main's
+      # current changelog, not this sha's copy: a re-run of an old sha (the
+      # redeploy path) must publish main's already-stamped state, not re-stamp
+      # old entries with the re-run date. Working-copy only — nothing reaches
+      # main unless the deploy proves healthy (commit-changelog).
       - uses: actions/setup-node@v4
         if: matrix.name == 'nginx' && github.event_name == 'push'
         with:
           node-version: 24
       - name: Stamp changelog Unreleased section
         if: matrix.name == 'nginx' && github.event_name == 'push'
-        run: node us-congress/deploy/stamp-changelog-run.js
+        run: |
+          git fetch --depth=1 origin main
+          git restore --source=FETCH_HEAD -- us-congress/CHANGELOG.md
+          cp us-congress/CHANGELOG.md changelog-input.md
+          node us-congress/deploy/stamp-changelog-run.js
 
-      # Hand the exact stamped bytes to commit-changelog: a re-stamp there
-      # could drift a day if the approval gate spans midnight in Chicago.
+      # Hand commit-changelog the exact stamped bytes (a re-stamp there could
+      # drift a day if the approval gate spans midnight in Chicago) plus the
+      # pre-stamp input its concurrent-edit guard diffs against.
       - name: Upload stamped changelog
         if: matrix.name == 'nginx' && github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: stamped-changelog
-          path: us-congress/CHANGELOG.md
+          path: |
+            us-congress/CHANGELOG.md
+            changelog-input.md
           overwrite: true
           retention-days: 90
 
@@ -278,7 +293,9 @@ jobs:
   # The artifact carries the exact bytes the published docs image was built
   # from. The push uses the built-in GITHUB_TOKEN (left in .git/config by
   # checkout), whose pushes never trigger workflow runs — the primary guard
-  # against a re-deploy loop; the trigger's paths exclusion is the backstop.
+  # against a re-deploy loop; the images job's commit-message skip is the
+  # backstop. The commit message prefix is load-bearing: the images guard and
+  # workflow.test.js both pin it.
   commit-changelog:
     needs: [deploy]
     if: github.event_name == 'push' && needs.deploy.result == 'success'
@@ -301,17 +318,21 @@ jobs:
       - name: Commit the stamp to main
         env:
           TARGET_SHA: ${{ github.sha }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          git fetch --depth=1 origin "$TARGET_SHA"
-          # If the changelog changed on main since the deployed sha (e.g. a
+          # If the changelog moved on main since the stamp was taken (e.g. a
           # changelog-only merge during the approval gate), overwriting it
-          # with the artifact would silently drop those entries. Skip loudly
-          # instead — the next deploy stamps whatever Unreleased then holds.
-          if ! git diff --quiet "$TARGET_SHA" HEAD -- us-congress/CHANGELOG.md; then
-            echo "changelog changed on main since $TARGET_SHA — skipping commit-back"
+          # would silently drop those entries. Skip — loudly, since the deploy
+          # shipped healthy but main stays unstamped until the next deploy.
+          if ! diff -q stamped/changelog-input.md us-congress/CHANGELOG.md > /dev/null; then
+            echo "::warning::changelog changed on main since the stamp was taken — commit-back skipped; the deploy shipped but main stays unstamped until the next deploy"
+            curl -fsS -X POST -H 'Content-type: application/json' \
+              --data "{\"text\":\"⚠️ govql deploy ${TARGET_SHA} is healthy, but the changelog stamp was NOT committed back (changelog moved on main) — ${RUN_URL}\"}" \
+              "$SLACK_WEBHOOK_URL" || true
             exit 0
           fi
-          mv stamped/CHANGELOG.md us-congress/CHANGELOG.md
+          mv stamped/us-congress/CHANGELOG.md us-congress/CHANGELOG.md
           if git diff --quiet -- us-congress/CHANGELOG.md; then
             echo "Unreleased was empty — nothing was stamped, nothing to commit"
             exit 0
@@ -320,4 +341,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add us-congress/CHANGELOG.md
           git commit -m "docs(us-congress): stamp changelog for deploy $TARGET_SHA"
-          git push origin HEAD:main
+          # A merge can land on main between checkout and push; one rebase
+          # retry covers it. If the rebase hits a conflict (that merge touched
+          # the changelog), fail loudly rather than force anything.
+          git push origin HEAD:main || {
+            git pull --rebase origin main
+            git push origin HEAD:main
+          }
