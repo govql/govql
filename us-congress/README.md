@@ -7,8 +7,6 @@ US Senate and House roll call vote data, served as a GraphQL API via PostGraphil
 - [dotenvx](https://dotenvx.com/docs/install) for secret management
 - Docker Desktop (Mac/Windows) or Docker Engine + Compose plugin (Linux)
 
----
-
 ## Local Development
 
 The dev override re-exposes port 4000 and skips nginx (no certs needed locally).
@@ -60,20 +58,11 @@ done
 
 The Postgres schema is managed with [Flyway](https://documentation.red-gate.com/flyway). Migrations live in [`db/migrations/`](db/migrations), named `Vnnn__description.sql` (zero-padded, sequential). A one-shot `flyway` service applies any pending migrations automatically on every `docker compose up` — the API server waits for it to finish before starting — so **schema changes deploy with the same `up` command as code**, no manual `psql`.
 
+Migrations are **forward-only**: there is no down path, so rolling a deployed image back does not undo a migration that shipped with it (the [rollback runbook](#operator-runbook) warns about this). Keep them additive and deprecate-before-remove, so an older server image keeps working against a newer schema and a rollback stays safe.
+
 **To change the schema:** add the next migration, e.g. `db/migrations/V003__add_foo.sql`. Never edit a migration that has already been applied — Flyway checksums them — always add a new one. Keep migrations hand-written, readable SQL: the API reference pages are generated from them by [`docs/scripts/generate-schema-docs.mjs`](docs/scripts/generate-schema-docs.mjs) (re-run `npm run generate-schema-docs` after schema changes).
 
 **Service-account roles** (e.g. `grafana_reader`) are created at database init from [`db/roles/`](db/roles) (fresh volume only); their grants live in migrations (see `db/migrations/V002__grafana_reader_grants.sql`).
-
-### Adopting Flyway on an existing database (one-time)
-
-A database that already had the schema before Flyway must be **baselined** once, so Flyway records the current state as already-applied instead of trying to recreate it:
-
-```bash
-dotenvx run -- docker compose run --rm flyway \
-  -baselineVersion=1 -baselineDescription="pre-Flyway schema" baseline
-```
-
-After that, `docker compose up` applies only newer migrations. A brand-new (empty) database needs no baseline — Flyway builds it from `V001` on the first `up`.
 
 ## Changelog
 
@@ -86,9 +75,151 @@ Consumer-facing API changes are tracked in [`CHANGELOG.md`](CHANGELOG.md) ([Keep
 
 The changelog is rendered on the docs site at `/docs/changelog`, as a section in the API Reference sidebar. The page `docs/docs/schema/changelog.md` is **generated** from `CHANGELOG.md` by `docs/scripts/sync-changelog.mjs` (runs automatically on `npm run build` / `npm run start`; run `npm run sync-changelog` to regenerate manually). Edit `CHANGELOG.md`, not the generated page.
 
+## Deploying changes (one-click)
+
+Every change — code, schema, docs site — ships through the same pipeline, and
+the droplet never builds. A merge to `main` builds immutable images, a single
+approval releases them onto the droplet, and an external health check decides
+whether the deploy passed.
+
+```mermaid
+flowchart LR
+    A[Merge to main] --> B[CI builds 4 SHA-tagged<br/>images, pushes to GHCR]
+    B --> C{Approve production<br/>environment}
+    C -->|one click| D[Droplet pulls images as govql,<br/>digests verified]
+    D --> E[compose up -d,<br/>Flyway migrates]
+    E --> F[External health check]
+    F -->|pass| G[Stamp changelog,<br/>commit to main]
+    F -->|fail| H[Deploy fails, Slack posts ❌]
+```
+
+Step by step:
+
+1. **Merge to `main`.** CI builds the four images and pushes them to GHCR
+   tagged with the commit SHA (`.github/workflows/us-congress.yml`).
+2. **Approve the deploy.** The `deploy` job waits on the GitHub `production`
+   environment's required reviewer — Slack pings when it's waiting. One click
+   in the Actions run releases it.
+3. **The droplet swaps the stack.** The job SSHes in as the unprivileged
+   `govql` user with the deploy-only key (pinned host key, strict checking).
+   The key's forced command — `deploy/ci-deploy.sh` — is the only thing it
+   can run: it validates the sha, refuses rollbacks to an ancestor of what's
+   deployed, checks the commit out, and hands off to `deploy/deploy.sh`,
+   which pulls the four SHA-tagged app images and **refuses to start unless
+   their digests match what CI just built** (GHCR tags are mutable; digests
+   are not). Then `docker compose up -d`: Flyway applies any pending
+   `db/migrations/V*.sql`, and the API server re-introspects the schema.
+   Docs-site changes ride along — the Docusaurus build is baked into the
+   `nginx` image.
+4. **The outcome is recorded.** An external health check probes the live docs
+   site and GraphQL API from outside CI (`deploy/health-check-run.js`); that
+   probe, not "containers started," is the deploy verdict. On success CI stamps
+   `CHANGELOG.md`'s `Unreleased` section with the deploy date and commits it
+   back to `main`. Slack reports success or failure with the SHA and a run
+   link, and the run appears as a GitHub deployment on the `production`
+   environment.
+
+Because all four images are retagged every deploy, all four containers are
+recreated together — nginx re-resolves the `server` container's IP on start,
+so the stale-IP 502 that manual partial restarts could cause doesn't apply to
+a pipeline deploy. If you ever bounce `server` by hand, follow it with
+`docker compose restart nginx`.
+
+### Operator runbook
+
+Three actions cover day-to-day operation: approve a pending deploy, roll back
+to an earlier commit, and redeploy a specific commit on demand.
+
+**Approve a pending deploy.** Every merge to `main` builds the images and then
+parks the `deploy` job on the `production` environment's required-reviewer
+gate. GitHub emails the reviewers and Slack posts an "awaiting approval"
+message. To release it, open the run under **Actions → us-congress**, click
+**Review deployments**, tick **production**, and **Approve and deploy**. The
+droplet pulls the images and brings the stack up, and the external health check
+reports the verdict to Slack.
+
+**Roll back, or redeploy a specific commit.** Both are the same action: a
+manual `workflow_dispatch` on the `us-congress` workflow pointed at a target
+commit, behind the same `production` approval. It redeploys that commit's
+already-built images with no rebuild; rolling back to an earlier commit and
+redeploying the current one differ only in the SHA you pass.
+
+1. Find the target SHA — a full 40-hex commit SHA on `main` (short SHAs, branch
+   names, and tags are rejected):
+   ```bash
+   git log --oneline main        # find the last good commit
+   git rev-parse <that-commit>   # its full 40-hex SHA
+   ```
+2. Trigger it:
+   - **UI:** Actions → **us-congress** → **Run workflow** ▾ → paste the SHA into
+     `sha` → **Run workflow**.
+   - **CLI:** `gh workflow run us-congress.yml -f sha=<full-40-hex-sha>`
+3. Approve the `production` gate as you would a normal deploy. The run pulls the
+   target commit's retained images, runs `docker compose up -d`, and finishes on
+   the external health check.
+
+What to expect from a dispatch:
+
+- **A rollback restores code and docs, not the schema.** Migrations are
+  forward-only (see [Database schema & migrations](#database-schema--migrations)),
+  so if the bad deploy shipped a migration, rolling the image back won't undo it.
+  Additive, deprecate-before-remove migrations keep the older image running, but
+  a failure caused by the schema itself needs hands-on SSH.
+- **Any prior commit is still deployable.** Nothing prunes GHCR, so its images
+  stay pullable; `deploy/prune-images.sh` only bounds the droplet's local disk
+  (the current SHA plus one previous set).
+- **A dispatch sends no Slack message.** The awaiting-approval and outcome pings
+  fire only on push deploys, so a manual rollback sends none — you get GitHub's
+  native environment-approval notification and watch the run instead.
+- **A bad SHA fails before anything deploys.** A non-40-hex value is rejected by
+  the workflow's validate step (and again on the box); a well-formed SHA that
+  isn't reachable from `main` passes CI but is rejected on the droplet by the
+  deploy key's forced command (`deploy/ci-deploy.sh`) before `deploy.sh` runs.
+
+To deploy by hand from the box (the same script CI runs), SSH in and run:
+
+```bash
+sudo -u govql -i
+cd /opt/govql
+git fetch origin && git checkout --detach <sha>
+us-congress/deploy/up.sh --pull
+```
+
+### Enabling another operator
+
+Approving a deploy needs nothing on the droplet: no SSH access, no secrets, no
+deploy key. Add the person as a required reviewer on the `production`
+environment (repo **Settings → Environments → production → Required
+reviewers**), and they can approve any pending deploy from the Actions run.
+Triggering a `workflow_dispatch` rollback is a separate capability — it needs
+repo write access, so grant that too if the second operator should be able to
+start rollbacks, not just approve them. The deploy itself runs from the CI runner over
+the deploy-only SSH key in the `DEPLOY_SSH_KEY` environment secret, which is
+separate from anyone's personal key and locked to a single forced command on
+the box — a second operator never touches it.
+
+### Graduating to continuous deployment
+
+Two changes turn this from continuous delivery into continuous deployment:
+
+- **Remove the approval gate.** Delete the required reviewer from the
+  `production` environment (**Settings → Environments → production**). Merges to
+  `main` then deploy straight through; that one setting is the whole gate, with
+  no workflow change.
+- **Add health-check-gated automatic rollback.** The pieces are already here —
+  the external health check gates the deploy verdict, and `workflow_dispatch`
+  redeploys any prior commit — but wiring a failed check to redeploy the
+  last-good SHA on its own is deferred. Until then, a failed deploy is rolled
+  back by hand with the runbook above.
+
+The gate stays for now on purpose: the API is public and its test coverage is
+thin, so a person confirms each deploy.
+
 ---
 
 ## Deploying to DigitalOcean
+
+This section doesn't really belong in a README, but it's potentially useful information and I'm not sure where else to put it, so . . .
 
 ### 1. Root-only setup
 
@@ -269,108 +400,3 @@ docker exec us-congress-scraper-1 /usr/local/bin/usc-run votes
 # Ingest into PostgreSQL (legislators must go first)
 docker exec us-congress-ingester-1 sh -c "node /app/src/ingest-legislators.js && node /app/src/ingest-votes.js"
 ```
-
-## Deploying changes (one-click)
-
-Every change — code, schema, docs site — ships through the same pipeline; the
-droplet never builds:
-
-1. **Merge to `main`.** CI builds the four images and pushes them to GHCR
-   tagged with the commit SHA (`.github/workflows/us-congress.yml`).
-2. **Approve the deploy.** The `deploy` job waits on the GitHub `production`
-   environment's required reviewer — Slack pings when it's waiting. One click
-   in the Actions run releases it.
-3. **The droplet swaps the stack.** The job SSHes in as the unprivileged
-   `govql` user with the deploy-only key (pinned host key, strict checking).
-   The key's forced command — `deploy/ci-deploy.sh` — is the only thing it
-   can run: it validates the sha, refuses rollbacks to an ancestor of what's
-   deployed, checks the commit out, and hands off to `deploy/deploy.sh`,
-   which pulls the four SHA-tagged app images and **refuses to start unless
-   their digests match what CI just built** (GHCR tags are mutable; digests
-   are not). Then `docker compose up -d`: Flyway applies any pending
-   `db/migrations/V*.sql`, and the API server re-introspects the schema.
-   Docs-site changes ride along — the Docusaurus build is baked into the
-   `nginx` image.
-4. **The outcome is recorded.** Slack reports success or failure with the SHA
-   and a run link, and the run appears as a GitHub deployment on the
-   `production` environment.
-
-Because all four images are retagged every deploy, all four containers are
-recreated together — nginx re-resolves the `server` container's IP on start,
-so the stale-IP 502 that manual partial restarts could cause doesn't apply to
-a pipeline deploy. If you ever bounce `server` by hand, follow it with
-`docker compose restart nginx`.
-
-**Removing the approval gate** (graduating to continuous deployment): delete
-the required reviewer from the `production` environment (repo Settings →
-Environments → production). That one setting is the whole gate — no workflow
-change needed.
-
-**Manual/emergency deploy** — the same thing the CI job runs:
-
-```bash
-sudo -u govql -i
-cd /opt/govql
-git fetch origin && git checkout --detach <sha>
-us-congress/deploy/up.sh --pull
-```
-
-> **First time only:** this production database predates Flyway, so run the one-time `baseline` (see [Adopting Flyway on an existing database](#adopting-flyway-on-an-existing-database-one-time)) **before** the first `up` that includes the `flyway` service — otherwise Flyway would try to recreate the existing schema and fail.
-
-## Hardening against probing
-
-The box is continuously probed by automated scanners (raw-IP TLS handshakes, WordPress/PHP
-webshell paths, etc.). None of it is a breach, but the defaults let it through noisily. The
-nginx config (`nginx/nginx.conf`) handles the bulk of it cheaply:
-
-- **Real 404s.** Unknown paths return a real `404` (the themed Docusaurus 404 page) instead of
-  silently serving the homepage with a `200`. This stops advertising "everything exists" to
-  scanners and makes the logs meaningful — a successful probe is now distinguishable from a
-  failed one.
-- **Refusing junk.** Known probe paths (`/wp-admin`, `/wp-login`, …) and server-side script
-  extensions (`.php`, `.asp`, `.jsp`, `.env`, …) get `444` (connection closed, no response).
-  Nothing here is WordPress or a scripting runtime, so these can never be legitimate.
-- **Rate limiting.** Per-IP request and connection limits (`limit_req` / `limit_conn`) cap
-  abusive bursts and return `429`. The static site's limits are generous (a page load pulls many
-  assets at once, and immutable `/assets/` + `/img/` are exempt from request throttling); the API
-  limit is a coarse flood shield in front of PostGraphile's own finer 100 req/min per-IP limiter.
-- **Refusing raw-IP / unknown-host TLS.** A `:443` `default_server` with `ssl_reject_handshake`
-  rejects TLS handshakes that don't match a hostname we serve, so scanners hitting the raw IP
-  never get a request processed.
-
-The host firewall (`ufw`, see [Root-only setup](#1-root-only-setup)) already limits inbound to
-22/80/443, which covers the firewall-minimization side of hardening.
-
-### Deferred next layers (not yet implemented)
-
-These are higher-effort layers that live in infrastructure/account configuration rather than this
-repo. Documented here so the rationale isn't lost:
-
-- **Dynamic IP-blocking (fail2ban / CrowdSec).** Useful for shedding *repeat* offenders at the
-  kernel firewall and cutting log noise, but a *next* layer — the nginx rules plus the app's
-  per-IP limiter already absorb most of the volume. Classic **fail2ban fits this stack poorly**:
-  it wants a host log file, but our logs go straight to stdout → Vector → Loki (no file on disk),
-  and it's per-IP, so it can't touch the distributed/rotating cloud-IP scanning that dominates the
-  traffic. If we adopt dynamic blocking, prefer **CrowdSec** — it reads container logs over the
-  Docker socket (no host log file), runs as a Compose service, has decoupled "bouncers"
-  (host-firewall / in-nginx / Cloudflare), and ships crowdsourced blocklists that *do* cover
-  distributed scanners.
-- **Cloudflare (highest-value next move).** Putting the site behind Cloudflare hides the origin
-  IP (so raw-IP scanning can be firewalled off entirely), uses edge reputation to handle
-  distributed scanners, and edge-caches the static site. It's an infrastructure migration, not a
-  code change, with prerequisites worth planning for:
-  1. **DNS / certs.** The proxy requires Cloudflare to serve the proxied records, which breaks the
-     current acme.sh **Gandi DNS-01** wildcard issuance (see [Obtain a wildcard TLS
-     certificate](#5-obtain-a-wildcard-tls-certificate)). Switch to Cloudflare's DNS-01 plugin, or
-     use a Cloudflare **Origin CA** cert on the origin with SSL mode **Full (strict)**.
-  2. **Real client IP.** Once proxied, nginx sees Cloudflare's IP. Add `set_real_ip_from <CF
-     ranges>` + `real_ip_header CF-Connecting-IP` (realip module) so the rate limits **and** the
-     API's `X-Forwarded-For` logic still see the true client — otherwise every visitor collapses
-     to a handful of Cloudflare IPs and both limiters misbehave.
-  3. **Origin lockdown.** Restrict the host firewall to Cloudflare's IP ranges, or scanners simply
-     hit the raw IP and bypass the edge.
-  4. **API subdomain.** Disable caching for `api.govql.us` (dynamic GraphQL); Cloudflare's free
-     100s edge timeout is fine against the 30s `proxy_read_timeout`.
-
-  The free tier covers DDoS mitigation, Bot Fight Mode, a few custom WAF rules, and one basic
-  rate-limiting rule; the managed OWASP ruleset requires a paid plan.
