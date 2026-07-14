@@ -41,7 +41,7 @@ function makeSandbox() {
     mkdirSync(deployDir, { recursive: true });
     writeFileSync(
       join(deployDir, 'deploy.sh'),
-      `#!/bin/sh\necho "deploy.sh ${version} at $(git rev-parse HEAD) stdin=$(cat)" >> '${log}'\n`
+      `#!/bin/sh\necho "deploy.sh ${version} at $(git rev-parse HEAD) args=$* stdin=$(cat)" >> '${log}'\n`
     );
     chmodSync(join(deployDir, 'deploy.sh'), 0o755);
     git('add', '-A');
@@ -104,8 +104,8 @@ test('ci-deploy.sh fetches, checks out the target commit, and runs its deploy.sh
   run(v2, 'scraper sha256:aaa');
   assert.equal(
     readFileSync(log, 'utf8').trim(),
-    `deploy.sh v2 at ${v2} stdin=scraper sha256:aaa`,
-    'the target commit is checked out and its own deploy.sh receives stdin'
+    `deploy.sh v2 at ${v2} args= stdin=scraper sha256:aaa`,
+    'the target commit is checked out and its own deploy.sh receives stdin, no rollback flag'
   );
   assert.equal(git('rev-parse', 'HEAD'), v2, 'clone left at the deployed commit');
 });
@@ -120,4 +120,48 @@ test('ci-deploy.sh refuses to roll back to an ancestor of the deployed commit', 
   // Re-deploying the current commit stays allowed (idempotent re-run).
   run(v2, '');
   assert.match(readFileSync(log, 'utf8'), /deploy\.sh v2/, 'same-sha redeploy runs');
+});
+
+test('ci-deploy.sh "rollback <sha>" deploys an ancestor the plain form refuses (0007)', () => {
+  const { git, commitDeployStub, run, log } = makeSandbox();
+  const v1 = commitDeployStub('v1');
+  const v2 = commitDeployStub('v2');
+  // The plain form refuses v1 (an ancestor of the deployed v2); the explicit
+  // rollback form is the operator's break-glass that bypasses that guard.
+  assert.throws(() => run(v1), refusedWith(/refusing rollback/), 'plain form still refuses the ancestor');
+  run(`rollback ${v1}`, '');
+  assert.match(readFileSync(log, 'utf8'), new RegExp(`deploy\\.sh v1 at ${v1}`), 'rollback checks out v1 and runs its deploy.sh');
+  assert.equal(git('rev-parse', 'HEAD'), v1, 'clone left at the rolled-back commit');
+});
+
+test('ci-deploy.sh "rollback" keeps the sha-shape and reachable-from-main guards (0007)', () => {
+  const { git, commitDeployStub, run, log } = makeSandbox();
+  const v1 = commitDeployStub('v1');
+  // Anything but a bare 40-hex sha after the keyword is rejected — the rollback
+  // form must not become an injection hole.
+  for (const bad of [
+    'rollback',
+    'rollback main',
+    'rollback abc123',
+    `rollback ${'f'.repeat(39)}`, // one hex short of 40
+    `rollback ${'f'.repeat(41)}`, // one hex over 40
+    `rollback ${v1} ; reboot`,
+  ]) {
+    assert.throws(() => run(bad), refusedWith(/expected a 40-hex commit sha/), `rejects ${JSON.stringify(bad)}`);
+  }
+  // A real commit that never landed on main is still refused, even via rollback.
+  git('checkout', '-q', '-b', 'feature');
+  const unmerged = commitDeployStub('feature-v1');
+  git('checkout', '-q', 'main');
+  assert.throws(() => run(`rollback ${unmerged}`), refusedWith(/not reachable from origin\/main/));
+  assert.ok(!existsSync(log), 'deploy.sh never ran');
+});
+
+test('ci-deploy.sh signals rollback to deploy.sh with --rollback, plain deploys without it (0007)', () => {
+  const { commitDeployStub, run, log } = makeSandbox();
+  const v1 = commitDeployStub('v1');
+  run(`rollback ${v1}`, '');
+  assert.match(readFileSync(log, 'utf8'), /deploy\.sh v1 .* args=--rollback /, 'rollback hands deploy.sh the --rollback flag');
+  run(v1, 'scraper sha256:aaa');
+  assert.match(readFileSync(log, 'utf8'), /deploy\.sh v1 .* args= stdin=scraper/, 'a plain deploy carries no rollback flag and gets the digests');
 });

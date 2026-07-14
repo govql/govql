@@ -14,6 +14,20 @@ on:
     paths:
       - 'us-congress/**'
       - '.github/workflows/us-congress.yml'
+  # Manual rollback / on-demand redeploy (task 0007): run the same gated deploy
+  # path against an arbitrary commit. It pulls that commit's retained images —
+  # no rebuild — so the images job is skipped and no digests are verified.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: >-
+          Full 40-hex commit SHA to (re)deploy. Rollback = an earlier known-good
+          commit; redeploy = the current commit. Pulls that commit's retained
+          images (no rebuild). NOTE: database migrations are forward-only — an
+          image rollback does NOT undo a schema change, and a schema-caused
+          failure may need hands-on intervention.
+        required: true
+        type: string
 
 # Deliberately minimal: packages: write is granted job-level to `images` only,
 # so a PR-triggered run of any other job never carries a token that could
@@ -31,9 +45,12 @@ jobs:
     # Everything that could loop (deploy, docs publish) needs this job, so
     # skipping it kills the run. workflow.test.js pins the prefix to the
     # message commit-changelog writes — change them together.
+    # A manual dispatch (rollback/redeploy) deploys retained images, so it must
+    # not rebuild — skip the whole job. deploy tolerates the skip (its `if`).
     if: >-
+      github.event_name != 'workflow_dispatch' && (
       github.event_name == 'pull_request' ||
-      !startsWith(github.event.head_commit.message, 'docs(us-congress): stamp changelog')
+      !startsWith(github.event.head_commit.message, 'docs(us-congress): stamp changelog') )
     permissions:
       contents: read
       packages: write
@@ -125,6 +142,13 @@ jobs:
             type=sha,prefix=,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
+      # Rollback retention: every merge pushes an immutable SHA-tagged image and
+      # nothing here (or elsewhere in .github/) prunes GHCR, so prior SHA tags
+      # stay pullable — that is what a rollback (workflow_dispatch) relies on. Do
+      # not add a GHCR cleanup/retention action without excluding recent SHA
+      # tags, or it would delete rollback targets out from under the operator.
+      # (On-box disk is bounded separately by deploy/prune-images.sh, which keeps
+      # the current + previous SHA set. Full runbook: task 0008.)
       - name: Build and push
         id: build
         uses: docker/build-push-action@v6
@@ -207,7 +231,19 @@ jobs:
   # the Slack webhook; app secrets stay on the droplet in dotenvx.
   deploy:
     needs: [images, test]
-    if: github.event_name == 'push'
+    # Runs on a merge to main (fresh build → images success) or a manual
+    # rollback/redeploy dispatch (retained images → images skipped). Never a PR.
+    # The skipped-images allowance is scoped to the dispatch: on a push, images
+    # is also skipped by the changelog-stamp loop backstop (see the images job),
+    # and deploy must stay dead in that case, so a push still requires images to
+    # have succeeded. Either way it waits on the production environment approval.
+    if: >-
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      (
+        (github.event_name == 'push' && needs.images.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && needs.images.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     # Serialize deploys so two quick merges can't interleave on the droplet.
     concurrency:
@@ -238,7 +274,38 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$DROPLET_HOST_KEY" > ~/.ssh/known_hosts
 
+      # `required: true` is only enforced by the dispatch UI; an API/gh dispatch
+      # can still submit an empty or malformed sha. Reject it here rather than
+      # let TARGET_SHA fall back to github.sha and silently redeploy main's tip
+      # through the no-verification rollback path.
+      - name: Validate rollback target
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          if ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::rollback target must be a full 40-hex commit sha, got: '$TARGET_SHA'"
+            exit 1
+          fi
+
+      # A rollback/redeploy has no fresh build, so surface its scope — and the
+      # forward-only-migrations caveat — in the run summary for the record.
+      - name: Note rollback scope (forward-only migrations)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          {
+            echo "### Rollback / on-demand redeploy"
+            echo ""
+            echo "Deploying \`$TARGET_SHA\` by pulling its retained images — no rebuild."
+            echo ""
+            echo "⚠️ Database migrations are **forward-only**: an image rollback does **not** undo a schema change. A schema-caused failure may need hands-on intervention."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only a fresh build produces digest artifacts; a dispatch has none.
       - name: Collect built image digests
+        if: github.event_name == 'push'
         uses: actions/download-artifact@v4
         with:
           pattern: digest-*
@@ -248,18 +315,30 @@ jobs:
       - name: Deploy over SSH
         env:
           DROPLET_HOST: ${{ vars.DROPLET_HOST }}
-          TARGET_SHA: ${{ github.sha }}
-        # The remote side is the key's forced command (deploy/ci-deploy.sh):
-        # the command is nothing but the target sha, and the expected digests
-        # ride in on stdin. The key can do nothing else.
+          TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+        # The remote side is the key's forced command (deploy/ci-deploy.sh). A
+        # push sends nothing but the target sha with the expected digests on
+        # stdin. A dispatch sends the `rollback <sha>` form: the forced command
+        # bypasses the ancestor guard, pulls the sha's retained images, and
+        # skips digest verification (no fresh build to compare against). The key
+        # can do nothing else either way.
         run: |
-          cat digests/*.txt > digests.txt
-          ssh -i ~/.ssh/deploy_key \
-            -o IdentitiesOnly=yes \
-            -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
-            -o StrictHostKeyChecking=yes \
-            "govql@$DROPLET_HOST" \
-            "$TARGET_SHA" < digests.txt
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
+              -o StrictHostKeyChecking=yes \
+              "govql@$DROPLET_HOST" \
+              "rollback $TARGET_SHA" < /dev/null
+          else
+            cat digests/*.txt > digests.txt
+            ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
+              -o StrictHostKeyChecking=yes \
+              "govql@$DROPLET_HOST" \
+              "$TARGET_SHA" < digests.txt
+          fi
 
       # The deploy verdict: probe the live public docs site and GraphQL API
       # from the runner — the real DNS/TLS/nginx path, not container status —

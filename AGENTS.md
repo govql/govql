@@ -71,7 +71,16 @@ The `us-congress` Postgres schema is managed with **Flyway**.
   `us-congress/deploy/up.sh --pull`. Schema changes ride along: the gated
   one-shot `flyway` service runs `migrate` on the way up and the API server
   restarts after it (existing databases were adopted with a one-time
-  `flyway baseline -baselineVersion=1`). Full dev/prod steps are in
+  `flyway baseline -baselineVersion=1`). **Rollback / on-demand redeploy** is a
+  manual `workflow_dispatch` on the same gated deploy job, pointed at any prior
+  commit: it pulls that commit's retained SHA-tagged images (no rebuild) with the
+  digest gate relaxed — the production approval is the trust boundary — and the
+  droplet's forced command takes it via an explicit `rollback <sha>` form that
+  bypasses the ancestor-refusal guard (migrations are forward-only, so an image
+  rollback does not undo a schema change). Each deploy then prunes superseded
+  images (`us-congress/deploy/prune-images.sh`, keeping the current + previous
+  SHA set) so the droplet disk stays bounded; GHCR itself is never pruned, so
+  older images stay pullable for a rollback. Full dev/prod steps are in
   [`us-congress/README.md`](us-congress/README.md).
 - **Flyway image** is pinned to a specific version (`flyway/flyway:12.9.0-alpine`)
   for reproducible deploys — bump it deliberately, not via a floating tag.

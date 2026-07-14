@@ -18,7 +18,7 @@ const APPS = ['scraper', 'ingester', 'server', 'nginx'];
  * stub, and a docker stub whose `image inspect` answers from fixture files.
  * `pulled` maps service name → the digest the "registry" actually served.
  */
-function runDeploy({ stdin, pulled }) {
+function runDeploy({ stdin, pulled, args = [] }) {
   const sandbox = mkdtempSync(join(tmpdir(), 'govql-deploy-'));
   const repo = join(sandbox, 'repo');
   const deployDir = join(repo, 'us-congress', 'deploy');
@@ -31,7 +31,7 @@ function runDeploy({ stdin, pulled }) {
       env: gitEnv,
     });
   git('init', '-q');
-  for (const f of ['deploy.sh', 'up.sh']) {
+  for (const f of ['deploy.sh', 'up.sh', 'prune-images.sh']) {
     copyFileSync(join(HERE, f), join(deployDir, f));
     chmodSync(join(deployDir, f), 0o755);
   }
@@ -75,7 +75,7 @@ fi
     LOG: log,
     FIXTURES: fixtures,
   };
-  const exec = () => execFileSync(join(deployDir, 'deploy.sh'), [], { input: stdin, env });
+  const exec = () => execFileSync(join(deployDir, 'deploy.sh'), args, { input: stdin, env });
   const readLog = () => {
     try {
       return readFileSync(log, 'utf8').trim().split('\n');
@@ -104,7 +104,10 @@ test('deploy.sh pulls the app images, verifies their digests, and hands off to u
       `verifies ${name}`
     );
   }
-  assert.equal(log.at(-1), `IMAGE_TAG=${sha} dotenvx run -- docker compose up -d`, 'ends in up.sh');
+  const upIndex = log.indexOf(`IMAGE_TAG=${sha} dotenvx run -- docker compose up -d`);
+  assert.ok(upIndex !== -1, 'brings the stack up via up.sh');
+  const pruneIndex = log.findIndex((l) => /docker image ls/.test(l));
+  assert.ok(pruneIndex > upIndex, 'prunes old images only after the swap succeeds');
 });
 
 test('deploy.sh refuses to start the stack when a pulled digest does not match', () => {
@@ -126,4 +129,24 @@ test('deploy.sh refuses to pull at all when an expected digest is missing from s
   const { exec, readLog } = runDeploy({ stdin: stdinFor(digests), pulled: digestsFor(APPS) });
   assert.throws(exec, /Command failed/i, 'incomplete digest list aborts');
   assert.deepEqual(readLog(), [], 'nothing was pulled or started');
+});
+
+test('deploy.sh --rollback pulls the retained images and starts the stack without digest verification (0007)', () => {
+  // A rollback/redeploy of an already-shipped commit has no fresh build, so no
+  // CI-recorded digests to check against (relax-on-rollback: the human approval
+  // gate is the trust boundary). It pulls the retained SHA-tagged images and
+  // brings the stack up — no stdin digests, no image inspect, no mismatch abort.
+  const { sha, exec, readLog } = runDeploy({
+    stdin: '',
+    args: ['--rollback'],
+    pulled: { ...digestsFor(APPS), server: 'sha256:whatever-the-registry-serves' },
+  });
+  exec();
+  const log = readLog();
+  assert.equal(log[0], `IMAGE_TAG=${sha} dotenvx run -- docker compose pull scraper ingester server nginx`, 'pulls the four app images');
+  assert.ok(!log.some((l) => /image inspect/.test(l)), 'no digest verification on the rollback path');
+  const upIndex = log.indexOf(`IMAGE_TAG=${sha} dotenvx run -- docker compose up -d`);
+  assert.ok(upIndex !== -1, 'brings the stack up');
+  const pruneIndex = log.findIndex((l) => /docker image ls/.test(l));
+  assert.ok(pruneIndex > upIndex, 'the rollback path also prunes old images after the swap');
 });

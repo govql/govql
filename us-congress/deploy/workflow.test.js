@@ -19,9 +19,67 @@ test('deploy job waits on the images build and the production environment gate',
   assert.ok(deploy, 'workflow has a deploy job');
   assert.ok([].concat(deploy.needs).includes('images'), 'deploy depends on the images build');
   assert.equal(deploy.environment?.name, 'production', 'deploy is gated on the production environment');
-  assert.equal(deploy.if, "github.event_name == 'push'", 'deploy runs only on push, never on PRs');
+  // Runs on a merge to main OR a manual rollback/redeploy dispatch — never on a PR.
+  assert.match(deploy.if, /github\.event_name == 'push'/, 'deploy runs on push');
+  assert.match(deploy.if, /github\.event_name == 'workflow_dispatch'/, 'deploy also runs on a manual dispatch');
+  assert.doesNotMatch(deploy.if, /pull_request/, 'deploy never runs on a PR');
   // The "to main" half of the gate lives in the trigger, not the job condition.
   assert.deepEqual(workflow.on.push.branches, ['main'], 'push trigger is filtered to main');
+});
+
+test('a manual workflow_dispatch takes a target sha and warns that migrations are forward-only (0007)', () => {
+  const dispatch = workflow.on.workflow_dispatch;
+  assert.ok(dispatch, 'workflow has a workflow_dispatch entry point');
+  const input = dispatch.inputs?.sha;
+  assert.ok(input, 'dispatch takes a `sha` input — the commit to (re)deploy');
+  assert.equal(input.required, true, 'the target sha is required');
+  assert.match(input.description, /forward-only/i, 'the input description surfaces the forward-only-migrations caveat');
+
+  // The caveat is also surfaced in the run itself (step summary), not just the
+  // dispatch form, so it is visible after the fact.
+  const summaryStep = workflow.jobs.deploy.steps.find(
+    (s) => /GITHUB_STEP_SUMMARY/.test(s.run ?? '') && /forward-only/i.test(s.run ?? '')
+  );
+  assert.ok(summaryStep, 'the deploy job writes the forward-only caveat to the run summary');
+  assert.match(summaryStep.if ?? '', /workflow_dispatch/, 'the caveat summary is a dispatch-only step');
+});
+
+test('a dispatch deploys retained images: images build is skipped and the rollback command form is used (0007)', () => {
+  // A rollback/redeploy pulls the target sha's already-built images — it must
+  // not rebuild. So the images job does not run on a dispatch, and the deploy
+  // job tolerates that skip.
+  assert.match(workflow.jobs.images.if ?? '', /workflow_dispatch/, 'images job references the dispatch event to skip it');
+  // The skipped-images allowance is scoped to the dispatch path. On a push,
+  // images is also skipped by the changelog-stamp loop backstop, and deploy
+  // must NOT run then — so a push still requires images to have succeeded.
+  assert.match(
+    workflow.jobs.deploy.if,
+    /github\.event_name == 'workflow_dispatch' && needs\.images\.result == 'skipped'/,
+    'a dispatch deploys even though images was skipped'
+  );
+  assert.match(
+    workflow.jobs.deploy.if,
+    /github\.event_name == 'push' && needs\.images\.result == 'success'/,
+    'a push still requires a successful images build — skipped images (stamp-commit backstop) must not deploy'
+  );
+
+  const deploySteps = workflow.jobs.deploy.steps;
+  // The target sha comes from the dispatch input on a dispatch, else the pushed sha.
+  const sshStep = deploySteps.find((s) => /ssh /.test(s.run ?? ''));
+  assert.match(JSON.stringify(sshStep.env ?? {}), /inputs\.sha/, 'TARGET_SHA resolves to the dispatch input');
+  // The remote forced command gets the explicit `rollback <sha>` form so it
+  // bypasses the ancestor guard and skips digest verification.
+  assert.match(sshStep.run, /rollback \$TARGET_SHA/, 'a dispatch uses the rollback command form');
+  // The digest artifacts only exist for a fresh build, so the download is push-only.
+  const download = deploySteps.find((s) => /download-artifact/.test(s.uses ?? '') && /digest/.test(JSON.stringify(s)));
+  assert.match(download.if ?? '', /push/, 'digest download is skipped on a dispatch (no fresh build)');
+
+  // An empty/malformed dispatch input must fail loudly, not silently fall back
+  // to deploying main's tip through the no-verification rollback path.
+  const validate = deploySteps.find(
+    (s) => /workflow_dispatch/.test(s.if ?? '') && /\[0-9a-f\]\{40\}/.test(s.run ?? '')
+  );
+  assert.ok(validate, 'a dispatch validates the target sha is a full 40-hex commit before deploying');
 });
 
 test('deploy SSHes as the unprivileged govql user with a pinned host key', () => {
