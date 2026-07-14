@@ -164,6 +164,12 @@ jobs:
       name: production
       url: https://govql.us
     steps:
+      # For the post-deploy health-check poller (deploy/health-check-run.js).
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Set up the deploy key and pinned host key
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -196,6 +202,13 @@ jobs:
             -o StrictHostKeyChecking=yes \
             "govql@$DROPLET_HOST" \
             "$TARGET_SHA" < digests.txt
+
+      # The deploy verdict: probe the live public docs site and GraphQL API
+      # from the runner — the real DNS/TLS/nginx path, not container status —
+      # retrying for ~2 minutes so normal startup isn't a false failure. A
+      # non-zero exit fails this job, and notify-outcome reports it as ❌.
+      - name: Post-deploy external health check
+        run: node us-congress/deploy/health-check-run.js
 
   # Report the deploy's outcome to Slack from a follow-up job, not steps in
   # deploy itself: a deploy cancelled before it starts (superseded in the

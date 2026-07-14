@@ -71,6 +71,24 @@ test('packages: write is scoped to the images job, not PR-triggered jobs at larg
   }
 });
 
+test('deploy is verified from outside: external health check is the last step of the deploy job', () => {
+  const steps = workflow.jobs.deploy.steps;
+  const sshIndex = steps.findIndex((s) => /ssh /.test(s.run ?? ''));
+  const healthIndex = steps.findIndex((s) => /health-check-run\.js/.test(s.run ?? ''));
+  assert.ok(healthIndex !== -1, 'deploy runs the external health-check poller');
+  assert.ok(healthIndex > sshIndex, 'health check runs after the stack is brought up over SSH');
+  assert.equal(
+    healthIndex,
+    steps.length - 1,
+    'health check is the final step — its exit code is the deploy verdict notify-outcome reports'
+  );
+  // The poller lives in the repo, so the deploy job must check it out.
+  assert.ok(
+    steps.some((s) => /actions\/checkout/.test(s.uses ?? '')),
+    'deploy checks out the repo to get the poller'
+  );
+});
+
 test('CI reads no application secrets — deploy key, Slack webhook, GITHUB_TOKEN only', () => {
   // App secrets live on the droplet in dotenvx and must never enter CI.
   const allowed = new Set(['GITHUB_TOKEN', 'DEPLOY_SSH_KEY', 'SLACK_WEBHOOK_URL']);
