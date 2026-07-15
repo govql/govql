@@ -19,27 +19,41 @@ _TWO_SENATORS = {
         "totalCount": 2,
         "nodes": [
             {
-                "bioguideId": "P000145", "firstName": "Alejandro",
-                "lastName": "Padilla", "officialFull": "Alex Padilla",
+                "bioguideId": "P000145",
+                "firstName": "Alejandro",
+                "lastName": "Padilla",
+                "officialFull": "Alex Padilla",
                 "legislatorTermsByBioguideIdList": [
-                    {"party": "Democrat", "state": "CA", "termType": "sen",
-                     "endDate": "2029-01-03"}
+                    {
+                        "party": "Democrat",
+                        "state": "CA",
+                        "termType": "sen",
+                        "endDate": "2029-01-03",
+                    }
                 ],
             },
             {
-                "bioguideId": "S001150", "firstName": "Adam",
-                "lastName": "Schiff", "officialFull": "Adam B. Schiff",
+                "bioguideId": "S001150",
+                "firstName": "Adam",
+                "lastName": "Schiff",
+                "officialFull": "Adam B. Schiff",
                 "legislatorTermsByBioguideIdList": [
-                    {"party": "Democrat", "state": "CA", "termType": "sen",
-                     "endDate": "2031-01-03"}
+                    {
+                        "party": "Democrat",
+                        "state": "CA",
+                        "termType": "sen",
+                        "endDate": "2031-01-03",
+                    }
                 ],
             },
-        ]
+        ],
     }
 }
 
 
-async def test_builds_normalized_nested_term_filter(client, mock_graphql, govql_endpoint):
+async def test_builds_normalized_nested_term_filter(
+    client, mock_graphql, govql_endpoint
+):
     route = mock_graphql.post(govql_endpoint).mock(
         return_value=graphql_response(data=_TWO_SENATORS)
     )
@@ -51,9 +65,9 @@ async def test_builds_normalized_nested_term_filter(client, mock_graphql, govql_
 
     some = _last_variables(route)["filter"]["legislatorTermsByBioguideId"]["some"]
     assert some["state"]["equalTo"] == "CA"
-    assert some["party"]["equalTo"] == "Democrat"   # full string, not "D"
+    assert some["party"]["equalTo"] == "Democrat"  # full string, not "D"
     assert some["termType"]["equalTo"] == "sen"
-    assert "greaterThan" in some["endDate"]          # current_only default
+    assert "greaterThan" in some["endDate"]  # current_only default
     payload = tool_payload(result)
     assert payload["data"]["total_matches"] == 2
     first = payload["data"]["legislators"][0]
@@ -74,10 +88,14 @@ async def test_name_search_uses_or_clause(client, mock_graphql, govql_endpoint):
     filt = _last_variables(route)["filter"]
     or_fields = {list(c.keys())[0] for c in filt["or"]}
     assert or_fields == {"lastName", "firstName", "officialFull", "nickname"}
-    assert "legislatorTermsByBioguideId" not in filt  # current_only False, no term facets
+    assert (
+        "legislatorTermsByBioguideId" not in filt
+    )  # current_only False, no term facets
 
 
-async def test_unknown_party_returns_error_without_network(client, mock_graphql, govql_endpoint):
+async def test_unknown_party_returns_error_without_network(
+    client, mock_graphql, govql_endpoint
+):
     route = mock_graphql.post(govql_endpoint).mock(
         return_value=graphql_response(data={"allLegislators": {"nodes": []}})
     )
@@ -89,7 +107,9 @@ async def test_unknown_party_returns_error_without_network(client, mock_graphql,
     assert route.called is False
 
 
-async def test_network_failure_returns_errors_payload(client, mock_graphql, govql_endpoint):
+async def test_network_failure_returns_errors_payload(
+    client, mock_graphql, govql_endpoint
+):
     mock_graphql.post(govql_endpoint).mock(side_effect=httpx.ConnectError("down"))
 
     result = await client.call_tool("find_legislator", {"state": "VT"})
@@ -114,26 +134,33 @@ _AZ_REP = {
         "totalCount": 1,
         "nodes": [
             {
-                "bioguideId": "A000381", "firstName": "Yassamin",
-                "lastName": "Ansari", "officialFull": "Yassamin Ansari",
+                "bioguideId": "A000381",
+                "firstName": "Yassamin",
+                "lastName": "Ansari",
+                "officialFull": "Yassamin Ansari",
                 "legislatorTermsByBioguideIdList": [
-                    {"party": "Democrat", "state": "AZ", "termType": "rep",
-                     "district": 3, "endDate": "2027-01-03"}
+                    {
+                        "party": "Democrat",
+                        "state": "AZ",
+                        "termType": "rep",
+                        "district": 3,
+                        "endDate": "2027-01-03",
+                    }
                 ],
             },
-        ]
+        ],
     }
 }
 
 
-async def test_district_search_filters_and_returns_district(client, mock_graphql, govql_endpoint):
+async def test_district_search_filters_and_returns_district(
+    client, mock_graphql, govql_endpoint
+):
     route = mock_graphql.post(govql_endpoint).mock(
         return_value=graphql_response(data=_AZ_REP)
     )
 
-    result = await client.call_tool(
-        "find_legislator", {"state": "AZ", "district": 3}
-    )
+    result = await client.call_tool("find_legislator", {"state": "AZ", "district": 3})
 
     some = _last_variables(route)["filter"]["legislatorTermsByBioguideId"]["some"]
     assert some["state"]["equalTo"] == "AZ"

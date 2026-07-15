@@ -33,22 +33,46 @@ RESPONSE_BYTE_BUDGET = 100_000
 _ENVELOPE_OVERHEAD = 2_000  # room for total_matches/truncated/keys around the list
 
 _PARTY_FULL = {
-    "d": "Democrat", "dem": "Democrat", "democrat": "Democrat", "democratic": "Democrat",
-    "r": "Republican", "rep": "Republican", "republican": "Republican",
-    "i": "Independent", "ind": "Independent", "independent": "Independent",
+    "d": "Democrat",
+    "dem": "Democrat",
+    "democrat": "Democrat",
+    "democratic": "Democrat",
+    "r": "Republican",
+    "rep": "Republican",
+    "republican": "Republican",
+    "i": "Independent",
+    "ind": "Independent",
+    "independent": "Independent",
 }
 _PARTY_CODE = {
-    "d": "D", "dem": "D", "democrat": "D", "democratic": "D",
-    "r": "R", "rep": "R", "republican": "R",
-    "i": "I", "ind": "I", "independent": "I",
+    "d": "D",
+    "dem": "D",
+    "democrat": "D",
+    "democratic": "D",
+    "r": "R",
+    "rep": "R",
+    "republican": "R",
+    "i": "I",
+    "ind": "I",
+    "independent": "I",
 }
 _CHAMBER_TERMTYPE = {
-    "s": "sen", "sen": "sen", "senate": "sen", "senator": "sen",
-    "h": "rep", "house": "rep", "rep": "rep", "representative": "rep",
+    "s": "sen",
+    "sen": "sen",
+    "senate": "sen",
+    "senator": "sen",
+    "h": "rep",
+    "house": "rep",
+    "rep": "rep",
+    "representative": "rep",
 }
 _CHAMBER_CODE = {
-    "s": "s", "sen": "s", "senate": "s",
-    "h": "h", "house": "h", "rep": "h",
+    "s": "s",
+    "sen": "s",
+    "senate": "s",
+    "h": "h",
+    "house": "h",
+    "rep": "h",
 }
 
 
@@ -90,7 +114,9 @@ def normalize_state(value: str | None) -> str | None:
         return None
     v = value.strip().upper()
     if len(v) != 2 or not v.isalpha():
-        raise ValueError(f"Unrecognized state: {value!r}. Expected a 2-letter code (e.g. 'CA').")
+        raise ValueError(
+            f"Unrecognized state: {value!r}. Expected a 2-letter code (e.g. 'CA')."
+        )
     return v
 
 

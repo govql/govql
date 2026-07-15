@@ -43,22 +43,29 @@ query FindVote($filter: VoteFilter, $first: Int) {
 async def find_vote(
     topic: Annotated[
         str | None,
-        Field(description="Free-text searched (case-insensitive) within the vote "
-                          "'question' text, e.g. 'immigration'."),
+        Field(
+            description="Free-text searched (case-insensitive) within the vote "
+            "'question' text, e.g. 'immigration'."
+        ),
     ] = None,
     chamber: Annotated[
-        str | None, Field(description="'house'/'h' or 'senate'/'s'."),
+        str | None,
+        Field(description="'house'/'h' or 'senate'/'s'."),
     ] = None,
     congress: Annotated[
-        int | None, Field(description="Congress number, e.g. 118."),
+        int | None,
+        Field(description="Congress number, e.g. 118."),
     ] = None,
     category: Annotated[
-        str | None, Field(description="Vote category, e.g. 'nomination', 'passage', "
-                                     "'cloture', 'amendment'. Exact match."),
+        str | None,
+        Field(
+            description="Vote category, e.g. 'nomination', 'passage', "
+            "'cloture', 'amendment'. Exact match."
+        ),
     ] = None,
     limit: Annotated[
-        int | None, Field(description="Max results (default 20, capped at 500). "
-                                     "Newest first."),
+        int | None,
+        Field(description="Max results (default 20, capped at 500). Newest first."),
     ] = None,
 ) -> dict[str, Any]:
     """Find roll-call votes by category, chamber, or congress — newest first.
@@ -112,5 +119,10 @@ async def find_vote(
         for n in connection["nodes"]
     ]
     items, truncated = guard_items(shaped)
-    return {"data": {"votes": items, "total_matches": connection.get("totalCount"),
-                     "truncated": truncated}}
+    return {
+        "data": {
+            "votes": items,
+            "total_matches": connection.get("totalCount"),
+            "truncated": truncated,
+        }
+    }

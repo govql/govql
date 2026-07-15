@@ -65,30 +65,44 @@ def _shape(node: dict[str, Any]) -> dict[str, Any]:
 async def find_legislator(
     name: Annotated[
         str | None,
-        Field(description="Case-insensitive substring matched across first name, "
-                          "last name, official full name, and nickname."),
+        Field(
+            description="Case-insensitive substring matched across first name, "
+            "last name, official full name, and nickname."
+        ),
     ] = None,
     state: Annotated[
-        str | None, Field(description="Two-letter USPS state code, e.g. 'CA'."),
+        str | None,
+        Field(description="Two-letter USPS state code, e.g. 'CA'."),
     ] = None,
     party: Annotated[
-        str | None, Field(description="Party: 'D'/'R'/'I' or a full name like "
-                                     "'Democrat'. Matches the member's term party."),
+        str | None,
+        Field(
+            description="Party: 'D'/'R'/'I' or a full name like "
+            "'Democrat'. Matches the member's term party."
+        ),
     ] = None,
     chamber: Annotated[
-        str | None, Field(description="'house'/'h' or 'senate'/'s'."),
+        str | None,
+        Field(description="'house'/'h' or 'senate'/'s'."),
     ] = None,
     district: Annotated[
-        int | None, Field(description="House district number (e.g. 3). House-only "
-                                     "(senators have none); at-large districts are 0. "
-                                     "Pair with state."),
+        int | None,
+        Field(
+            description="House district number (e.g. 3). House-only "
+            "(senators have none); at-large districts are 0. "
+            "Pair with state."
+        ),
     ] = None,
     current_only: Annotated[
-        bool, Field(description="Only members currently serving (a term ending in "
-                              "the future). Default true."),
+        bool,
+        Field(
+            description="Only members currently serving (a term ending in "
+            "the future). Default true."
+        ),
     ] = True,
     limit: Annotated[
-        int | None, Field(description="Max results (default 20, capped at 500)."),
+        int | None,
+        Field(description="Max results (default 20, capped at 500)."),
     ] = None,
 ) -> dict[str, Any]:
     """Find legislators by attributes when you don't know a bioguide id.
@@ -153,6 +167,10 @@ async def find_legislator(
     connection = result["data"]["allLegislators"]
     shaped = [_shape(n) for n in connection["nodes"]]
     items, truncated = guard_items(shaped)
-    return {"data": {"legislators": items,
-                     "total_matches": connection.get("totalCount"),
-                     "truncated": truncated}}
+    return {
+        "data": {
+            "legislators": items,
+            "total_matches": connection.get("totalCount"),
+            "truncated": truncated,
+        }
+    }
