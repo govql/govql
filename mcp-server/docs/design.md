@@ -76,8 +76,8 @@ House congress) pairwise slice and joining party client-side, because
 `member_party_agreement` did. `vote_similarity.member_a`/`member_b` now carry
 foreign keys to `legislators` (shipped in #63), so PostGraphile exposes
 `legislatorByMemberA` / `legislatorByMemberB` — party and name come back
-inline in one query instead of a separate lookup. That unblocks a future
-cross-party `most_agreeing_pairs` tool (see post-v0.4).
+inline in one query instead of a separate lookup. That unblocks the
+cross-party `most_agreeing_pairs` tool (v0.4).
 
 - **Passthrough robustness.** `execute_graphql` returns whatever the query
   returns and #36 left no page-size cap, so a large connection can overflow the
@@ -95,8 +95,8 @@ into one of three categories:
   `get_vote_with_positions`): "give me everything about this entity" — saves
   round-trips across joined tables.
 - **v0.4 — Aggregation/analysis tools** (`get_voting_record`,
-  `compare_voters`, `find_party_defectors`): tools that answer questions, not
-  just retrieve data.
+  `compare_voters`, `find_party_defectors`, `most_agreeing_pairs`): tools that
+  answer questions, not just retrieve data.
 
 Past v0.4, the project's wishlist shifts back to improving GovQL itself first
 — populating the `bills`/`cosponsors`/`committees` tables, a NL-query helper
@@ -104,13 +104,10 @@ in the docs site, LLM-tuned schema descriptions — rather than expanding the
 MCP surface further. That data work is what the relocated bill/committee
 tools below are waiting on.
 
-### Post-v0.4 (data- or scope-deferred)
+### Post-v0.4 (data-deferred)
 
-These are designed but held back — by unpopulated data or by milestone scope:
+These are designed but held back by unpopulated data:
 
-- **`most_agreeing_pairs`** (cross-party) — uses the `vote_similarity`
-  legislator FKs (#63, shipped) for inline `legislatorByMemberA/B` navigation;
-  deferred by milestone scope, not a missing prerequisite.
 - **`find_bill`, `list_committees`** (discovery) and **`get_bill`,
   `get_committee`** (detail) — need the `bills`/`cosponsors`/`committees`
   tables populated (the post-v0.4 GovQL data work).
