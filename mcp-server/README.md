@@ -117,7 +117,7 @@ As of 0.4.0, the server provides the three foundational tools (`execute_graphql`
 `compare_voters`, `find_party_defectors`) — the curated discovery/detail/analysis
 set is now complete. The remaining `most_agreeing_pairs` and bill/committee
 tools are post-v0.4: the bill/committee tools await GovQL data population, and
-`most_agreeing_pairs` is a scope-deferred extension of `compare_voters` — see
+`most_agreeing_pairs` awaits a server-side cross-party ranking aggregate — see
 [design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md).
 
 ## Links
