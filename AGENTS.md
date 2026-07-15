@@ -17,6 +17,43 @@ architectural header plus an ordered list of task pointers (task bodies in
 OpenCode. New work is appended by the `to-plan` workflow; it never creates a
 second plan.
 
+## Linking issues and PRs
+
+Goal: from any issue you can find its PRs, and from any merged PR you can find its
+issue — **without** auto-closing a tracking issue that spans many PRs (e.g. an
+epic like #56 covering several steps).
+
+The trick is to **reference** an issue, not **link** it. References give two-way
+discoverability with no auto-close; links and closing keywords auto-close on merge.
+
+**Do this (no auto-close):**
+
+- In every PR body, write a plain reference — `Part of #N` (or `Refs #N`, or just
+  `#N`). This records a cross-reference in issue #N's timeline *and* leaves a
+  clickable link in the PR body, in both directions, and does not close the issue.
+- Name the branch `<issue#>-<slug>` and create it with
+  `git checkout -b <issue#>-<slug> main`. The number ties it to the issue at a
+  glance, and a git-created branch is never auto-linked.
+
+**Avoid these (they auto-close the issue on merge, regardless of body text):**
+
+- Closing keywords — `Closes` / `Fixes` / `Resolves #N`. Use one **only** on the
+  PR that is meant to close the issue.
+- A Development-panel link, including any branch **"Created from" the issue** via
+  the GitHub issue UI. Merging *any* PR from such a branch closes the issue even if
+  the body says "Part of #N" — this is exactly how #56 was wrongly closed by the
+  scaffolding PR #57. After merging anything tied to a tracking issue, confirm it's
+  still open (`gh issue view <n> --json state`).
+
+**Close a tracking issue deliberately** — a closing keyword on the final PR, or by
+hand once every referenced PR has merged.
+
+**Find them:**
+
+```bash
+gh pr list --state all --search "#56 in:body"                          # issue -> PRs
+gh pr view <PR#> --json body --jq '[.body | scan("#[0-9]+")] | unique' # PR -> issue
+```
 **Planning-tool artifacts (Superpowers etc.) go under `plans/`, never
 a root `docs/`.** Superpowers defaults to writing plans and specs into
 `docs/superpowers/{plans,specs}`, but a new top-level `docs/` at the repo root
