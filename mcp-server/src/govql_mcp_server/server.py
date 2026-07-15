@@ -18,6 +18,8 @@ from .tools import (  # noqa: E402, F401
     describe_type,
     find_legislator,
     find_vote,
+    get_legislator,
+    get_vote_with_positions,
     list_types,
     passthrough,
 )

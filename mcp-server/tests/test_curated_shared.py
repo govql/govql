@@ -70,3 +70,39 @@ def test_today_iso_is_todays_date():
     from datetime import date
 
     assert cs.today_iso() == date.today().isoformat()
+
+
+def test_display_chamber_code_known_values():
+    assert cs.display_chamber_code("s") == "Senate"
+    assert cs.display_chamber_code("h") == "House"
+
+
+def test_display_chamber_code_passes_through_unknown():
+    assert cs.display_chamber_code("x") == "x"
+    assert cs.display_chamber_code(None) is None
+
+
+def test_display_chamber_termtype_known_values():
+    assert cs.display_chamber_termtype("sen") == "Senate"
+    assert cs.display_chamber_termtype("rep") == "House"
+
+
+def test_display_chamber_termtype_passes_through_unknown():
+    assert cs.display_chamber_termtype("x") == "x"
+    assert cs.display_chamber_termtype(None) is None
+
+
+def test_normalize_position_variants():
+    assert cs.normalize_position("yea") == "Yea"
+    assert cs.normalize_position("YEA") == "Yea"
+    assert cs.normalize_position("nay") == "Nay"
+    assert cs.normalize_position("Nay") == "Nay"
+    assert cs.normalize_position("present") == "Present"
+    assert cs.normalize_position("PRESENT") == "Present"
+    assert cs.normalize_position("not voting") == "Not Voting"
+    assert cs.normalize_position("NOT VOTING") == "Not Voting"
+
+
+def test_normalize_position_rejects_unknown():
+    with pytest.raises(ValueError):
+        cs.normalize_position("maybe")

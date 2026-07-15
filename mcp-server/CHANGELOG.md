@@ -4,6 +4,16 @@ All notable changes to `govql-mcp-server` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-07-09
+
+### Added
+
+- `get_legislator` tool — one member's identity plus full term history and a
+  derived `current` term block, by bioguide id.
+- `get_vote_with_positions` tool — one vote by id with precomputed tallies and
+  per-party breakdown; individual member positions are optional and filterable
+  by party/state/position, capped and byte-guarded.
+
 ## [0.2.0] — 2026-07-09
 
 ### Changed

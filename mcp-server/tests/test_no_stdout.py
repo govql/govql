@@ -23,6 +23,11 @@ _PACKAGE_MODULES = [
     "govql_mcp_server.tools._discovery_shared",
     "govql_mcp_server.tools.list_types",
     "govql_mcp_server.tools.describe_type",
+    "govql_mcp_server.tools._curated_shared",
+    "govql_mcp_server.tools.find_legislator",
+    "govql_mcp_server.tools.find_vote",
+    "govql_mcp_server.tools.get_legislator",
+    "govql_mcp_server.tools.get_vote_with_positions",
 ]
 
 
