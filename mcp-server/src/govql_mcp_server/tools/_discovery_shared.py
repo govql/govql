@@ -24,7 +24,11 @@ fragment TypeRef on __Type {
       ofType {
         kind
         name
-        ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } }
+        ofType {
+          kind
+          name
+          ofType { kind name ofType { kind name ofType { kind name } } }
+        }
       }
     }
   }

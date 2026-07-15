@@ -6,7 +6,6 @@ import httpx
 
 from tests.conftest import graphql_response, tool_payload
 
-
 _DESCRIBE_VOTE_RESULT = {
     "__type": {
         "kind": "OBJECT",

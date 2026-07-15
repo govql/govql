@@ -10,13 +10,19 @@ You'll need [uv](https://github.com/astral-sh/uv) (the Python package
 manager). Install it with the one-liner from its README, then:
 
 ```bash
-uv sync              # install deps into a local .venv
-uv run pytest        # run the test suite
-uv build             # build wheel + sdist for publishing
+uv sync                    # install deps into a local .venv
+uv run pytest              # run the test suite
+uv run ruff check .        # lint
+uv run ruff format .       # auto-format (or `--check` to just verify)
+uv build                   # build wheel + sdist for publishing
 ```
 
+CI runs `ruff check` and `ruff format --check` as a gate, so run them before
+pushing. Ruff config lives in `pyproject.toml` under `[tool.ruff]`.
+
 uv reads `.python-version` (currently `3.14`) to pick the interpreter; if
-you don't have it installed it will fetch it automatically.
+you don't have it installed it will fetch it automatically. The package
+supports Python 3.13+ (`requires-python`), so avoid syntax newer than 3.13.
 
 ## Layout
 
