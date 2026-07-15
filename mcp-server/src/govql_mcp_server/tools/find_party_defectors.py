@@ -21,7 +21,9 @@ from ._curated_shared import (
 
 _QUERY = """
 query FindPartyDefectors($filter: MemberPartyAgreementFilter, $first: Int) {
-  allMemberPartyAgreements(filter: $filter, orderBy: AGREEMENT_RATE_ASC, first: $first) {
+  allMemberPartyAgreements(
+    filter: $filter, orderBy: AGREEMENT_RATE_ASC, first: $first
+  ) {
     nodes {
       bioguideId
       memberParty
@@ -41,18 +43,26 @@ _ALL_PARTIES = ("D", "R", "I")
 @mcp.tool
 async def find_party_defectors(
     congress: Annotated[
-        int, Field(description="Congress number, e.g. 118. Required."),
+        int,
+        Field(description="Congress number, e.g. 118. Required."),
     ],
     chamber: Annotated[
-        str | None, Field(description="'house'/'h' or 'senate'/'s'. Omit for both."),
+        str | None,
+        Field(description="'house'/'h' or 'senate'/'s'. Omit for both."),
     ] = None,
     party: Annotated[
-        str | None, Field(description="Limit to one party ('D'/'R'/'I' or a full "
-                                     "name). Omit to rank across all parties."),
+        str | None,
+        Field(
+            description="Limit to one party ('D'/'R'/'I' or a full "
+            "name). Omit to rank across all parties."
+        ),
     ] = None,
     limit: Annotated[
-        int | None, Field(description="Max results (default 20, cap 500). Lowest "
-                                     "own-party agreement first."),
+        int | None,
+        Field(
+            description="Max results (default 20, cap 500). Lowest "
+            "own-party agreement first."
+        ),
     ] = None,
 ) -> dict[str, Any]:
     """Find members who least often voted with their own party's majority.
@@ -94,15 +104,22 @@ async def find_party_defectors(
     for row in result["data"]["allMemberPartyAgreements"]["nodes"]:
         leg = row.get("legislatorByBioguideId") or {}
         name = full_name(leg)
-        defectors.append({
-            "bioguideId": row["bioguideId"],
-            "name": name,
-            "memberParty": row["memberParty"],
-            "chamber": display_chamber_code(row.get("chamber")),
-            "agreementRate": row["agreementRate"],
-            "sharedVotes": row["sharedVotes"],
-            "agreed": row["agreed"],
-        })
+        defectors.append(
+            {
+                "bioguideId": row["bioguideId"],
+                "name": name,
+                "memberParty": row["memberParty"],
+                "chamber": display_chamber_code(row.get("chamber")),
+                "agreementRate": row["agreementRate"],
+                "sharedVotes": row["sharedVotes"],
+                "agreed": row["agreed"],
+            }
+        )
 
-    return {"data": {"congress": congress, "chamber": display_chamber_code(chamber_code),
-                      "defectors": defectors}}
+    return {
+        "data": {
+            "congress": congress,
+            "chamber": display_chamber_code(chamber_code),
+            "defectors": defectors,
+        }
+    }

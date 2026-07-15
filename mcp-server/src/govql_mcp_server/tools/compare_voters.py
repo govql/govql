@@ -26,14 +26,19 @@ query CompareVoters($a: String!, $b: String!, $filter: VoteSimilarityFilter) {
 @mcp.tool
 async def compare_voters(
     bioguide_id_a: Annotated[
-        str, Field(description="First member's bioguide id (from find_legislator)."),
+        str,
+        Field(description="First member's bioguide id (from find_legislator)."),
     ],
     bioguide_id_b: Annotated[
-        str, Field(description="Second member's bioguide id (from find_legislator)."),
+        str,
+        Field(description="Second member's bioguide id (from find_legislator)."),
     ],
     congress: Annotated[
-        int | None, Field(description="Restrict to one congress. Omit for every "
-                                     "congress the two share."),
+        int | None,
+        Field(
+            description="Restrict to one congress. Omit for every "
+            "congress the two share."
+        ),
     ] = None,
 ) -> dict[str, Any]:
     """Compare how often two members voted the same way.
@@ -45,7 +50,10 @@ async def compare_voters(
     """
     a, b = bioguide_id_a.strip(), bioguide_id_b.strip()
     if not a or not b:
-        return {"data": None, "errors": [{"message": "both bioguide ids must be non-empty"}]}
+        return {
+            "data": None,
+            "errors": [{"message": "both bioguide ids must be non-empty"}],
+        }
 
     lo, hi = sorted([a, b])  # storage order: member_a < member_b
     filt: dict[str, Any] = {"memberA": {"equalTo": lo}, "memberB": {"equalTo": hi}}
@@ -53,7 +61,9 @@ async def compare_voters(
         filt["congress"] = {"equalTo": congress}
 
     try:
-        result = await graphql_client.execute_graphql(_QUERY, {"a": a, "b": b, "filter": filt})
+        result = await graphql_client.execute_graphql(
+            _QUERY, {"a": a, "b": b, "filter": filt}
+        )
     except httpx.HTTPError as err:
         logger.warning("compare_voters transport failure: %s", err)
         return network_error_response(err)
@@ -65,13 +75,15 @@ async def compare_voters(
     comparisons = []
     for row in data["sims"]["nodes"]:
         shared = row["sharedVotes"]
-        comparisons.append({
-            "congress": row["congress"],
-            "chamber": display_chamber_code(row["chamber"]),
-            "sharedVotes": shared,
-            "agreed": row["agreed"],
-            "agreementRate": (row["agreed"] / shared) if shared else None,
-        })
+        comparisons.append(
+            {
+                "congress": row["congress"],
+                "chamber": display_chamber_code(row["chamber"]),
+                "sharedVotes": shared,
+                "agreed": row["agreed"],
+                "agreementRate": (row["agreed"] / shared) if shared else None,
+            }
+        )
     comparisons.sort(key=lambda r: r["congress"], reverse=True)
 
     out: dict[str, Any] = {
@@ -80,6 +92,7 @@ async def compare_voters(
         "comparisons": comparisons,
     }
     if not comparisons:
-        out["message"] = ("No shared congress+chamber found for these two members "
-                          "in vote_similarity.")
+        out["message"] = (
+            "No shared congress+chamber found for these two members in vote_similarity."
+        )
     return {"data": out}

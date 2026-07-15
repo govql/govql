@@ -161,7 +161,9 @@ def full_name(node: dict[str, Any] | None) -> str | None:
 
     None-safe: a missing node or missing parts yield None."""
     node = node or {}
-    return " ".join(x for x in (node.get("firstName"), node.get("lastName")) if x) or None
+    return (
+        " ".join(x for x in (node.get("firstName"), node.get("lastName")) if x) or None
+    )
 
 
 def clamp_limit(value: int | None) -> int:

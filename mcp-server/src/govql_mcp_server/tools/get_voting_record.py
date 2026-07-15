@@ -33,8 +33,12 @@ query GetVotingRecord($sFilter: MemberVotingSummaryFilter,
 # future/unknown position) falls through to `other` via the .get default — still
 # a vote cast, so it counts toward participation but is not a yea/nay/present.
 _POS_KEY = {
-    "Yea": "yea", "Aye": "yea", "Guilty": "yea",
-    "Nay": "nay", "No": "nay", "Not Guilty": "nay",
+    "Yea": "yea",
+    "Aye": "yea",
+    "Guilty": "yea",
+    "Nay": "nay",
+    "No": "nay",
+    "Not Guilty": "nay",
     "Present": "present",
     "Not Voting": "notVoting",
 }
@@ -43,11 +47,15 @@ _POS_KEY = {
 @mcp.tool
 async def get_voting_record(
     bioguide_id: Annotated[
-        str, Field(description="The member's bioguide id. Get one from find_legislator."),
+        str,
+        Field(description="The member's bioguide id. Get one from find_legislator."),
     ],
     congress: Annotated[
-        int | None, Field(description="Restrict to one congress (e.g. 118). Omit for "
-                                     "all congresses, one record each."),
+        int | None,
+        Field(
+            description="Restrict to one congress (e.g. 118). Omit for "
+            "all congresses, one record each."
+        ),
     ] = None,
 ) -> dict[str, Any]:
     """Return a member's voting behavior per congress.
@@ -61,7 +69,10 @@ async def get_voting_record(
     member has no summary rows.
     """
     if not bioguide_id or not bioguide_id.strip():
-        return {"data": None, "errors": [{"message": "bioguide_id must be a non-empty string"}]}
+        return {
+            "data": None,
+            "errors": [{"message": "bioguide_id must be a non-empty string"}],
+        }
     bid = bioguide_id.strip()
 
     s_filter: dict[str, Any] = {"bioguideId": {"equalTo": bid}}
@@ -89,9 +100,20 @@ async def get_voting_record(
     for row in data["s"]["nodes"]:
         c = row["congress"]
         rec = per_congress.setdefault(
-            c, {"congress": c, "chamber": None, "totalVotes": 0,
-                 "yea": 0, "nay": 0, "present": 0, "notVoting": 0, "other": 0,
-                 "participationRate": None, "partyLoyaltyRate": None})
+            c,
+            {
+                "congress": c,
+                "chamber": None,
+                "totalVotes": 0,
+                "yea": 0,
+                "nay": 0,
+                "present": 0,
+                "notVoting": 0,
+                "other": 0,
+                "participationRate": None,
+                "partyLoyaltyRate": None,
+            },
+        )
         rec[_POS_KEY.get(row["position"], "other")] += row["positions"]
         rec["totalVotes"] += row["positions"]
 

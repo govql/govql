@@ -11,15 +11,29 @@ def _last_variables(route) -> dict:
     return json.loads(route.calls.last.request.read().decode())["variables"]
 
 
-_DATA = {"allMemberPartyAgreements": {"nodes": [
-    {"bioguideId": "M000001", "memberParty": "D", "chamber": "s", "agreementRate": 0.55,
-     "sharedVotes": 500, "agreed": 275,
-     "legislatorByBioguideId": {"firstName": "Joe", "lastName": "Manchin"}},
-]}}
+_DATA = {
+    "allMemberPartyAgreements": {
+        "nodes": [
+            {
+                "bioguideId": "M000001",
+                "memberParty": "D",
+                "chamber": "s",
+                "agreementRate": 0.55,
+                "sharedVotes": 500,
+                "agreed": 275,
+                "legislatorByBioguideId": {"firstName": "Joe", "lastName": "Manchin"},
+            },
+        ]
+    }
+}
 
 
-async def test_all_parties_uses_or_of_own_party_clauses(client, mock_graphql, govql_endpoint):
-    route = mock_graphql.post(govql_endpoint).mock(return_value=graphql_response(data=_DATA))
+async def test_all_parties_uses_or_of_own_party_clauses(
+    client, mock_graphql, govql_endpoint
+):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_DATA)
+    )
 
     result = await client.call_tool(
         "find_party_defectors", {"congress": 118, "chamber": "senate"}
@@ -28,7 +42,9 @@ async def test_all_parties_uses_or_of_own_party_clauses(client, mock_graphql, go
     filt = _last_variables(route)["filter"]
     assert filt["congress"]["equalTo"] == 118
     assert filt["chamber"]["equalTo"] == "s"
-    clauses = {(c["memberParty"]["equalTo"], c["otherParty"]["equalTo"]) for c in filt["or"]}
+    clauses = {
+        (c["memberParty"]["equalTo"], c["otherParty"]["equalTo"]) for c in filt["or"]
+    }
     assert clauses == {("D", "D"), ("R", "R"), ("I", "I")}
     d = tool_payload(result)["data"]["defectors"][0]
     assert d["name"] == "Joe Manchin"
@@ -39,7 +55,9 @@ async def test_all_parties_uses_or_of_own_party_clauses(client, mock_graphql, go
 
 
 async def test_single_party_uses_direct_clause(client, mock_graphql, govql_endpoint):
-    route = mock_graphql.post(govql_endpoint).mock(return_value=graphql_response(data=_DATA))
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_DATA)
+    )
 
     await client.call_tool("find_party_defectors", {"congress": 118, "party": "dem"})
 
@@ -49,8 +67,12 @@ async def test_single_party_uses_direct_clause(client, mock_graphql, govql_endpo
     assert "or" not in filt
 
 
-async def test_unknown_party_errors_without_network(client, mock_graphql, govql_endpoint):
-    route = mock_graphql.post(govql_endpoint).mock(return_value=graphql_response(data=_DATA))
+async def test_unknown_party_errors_without_network(
+    client, mock_graphql, govql_endpoint
+):
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_DATA)
+    )
 
     result = await client.call_tool(
         "find_party_defectors", {"congress": 118, "party": "whigs"}
@@ -61,10 +83,12 @@ async def test_unknown_party_errors_without_network(client, mock_graphql, govql_
 
 
 async def test_limit_is_clamped(client, mock_graphql, govql_endpoint):
-    route = mock_graphql.post(govql_endpoint).mock(return_value=graphql_response(data=_DATA))
+    route = mock_graphql.post(govql_endpoint).mock(
+        return_value=graphql_response(data=_DATA)
+    )
 
     await client.call_tool("find_party_defectors", {"congress": 118})
-    assert _last_variables(route)["first"] == 20          # default
+    assert _last_variables(route)["first"] == 20  # default
 
     await client.call_tool("find_party_defectors", {"congress": 118, "limit": 9999})
-    assert _last_variables(route)["first"] == 500          # capped at LIMIT_MAX
+    assert _last_variables(route)["first"] == 500  # capped at LIMIT_MAX
