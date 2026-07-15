@@ -58,15 +58,6 @@ server has no runtime coupling to the JS backend, lives in a sibling
 directory at the repo root, and follows the conventions of a normal Python
 project (no shared linter, no shared lockfile, no proxied build commands).
 
-## Why no Dockerfile
-
-stdio MCP servers are spawned by the MCP client (Claude Desktop, Cursor,
-etc.) as a per-session subprocess. There is no long-running server to host.
-A Dockerfile would only be useful if a client wanted to run the server in
-a container, which is not how any current MCP client works. If demand
-emerges later we can publish a Docker image alongside the PyPI release;
-shipping one now would be cargo-cult engineering.
-
 ## Roadmap
 
 v0.1 ships the foundation. **v0.1.1** then closed a discoverability gap: with
@@ -78,19 +69,16 @@ views instead of brute-forcing over raw `VotePosition` rows.
 ### Next up (before v0.2)
 
 Testing v0.1.1 against the motivating question — *"which two opposing-party
-members vote together most often?"* — showed the agent now finds `VoteSimilarity`
-but still struggles, because the table is **party-blind**: `member_a`/`member_b`
-are bare bioguide IDs with **no foreign key** to `legislators` (unlike
-`member_party_agreement`, which has one). So the type exposes no
-`legislatorByMemberA`/`legislatorByMemberB` relation, "opposing parties" can't be
-filtered server-side, and the agent falls back to fetching the whole (~96k-row
-for a House congress) pairwise slice and joining party client-side.
+members vote together most often?"* — showed that the agent found
+`VoteSimilarity` but still fell back to fetching the whole (~96k-row for a
+House congress) pairwise slice and joining party client-side, because
+`vote_similarity` carried no relation back to `legislators` the way
+`member_party_agreement` did. `vote_similarity.member_a`/`member_b` now carry
+foreign keys to `legislators` (shipped in #63), so PostGraphile exposes
+`legislatorByMemberA` / `legislatorByMemberB` — party and name come back
+inline in one query instead of a separate lookup. That unblocks the
+cross-party `most_agreeing_pairs` tool (v0.4).
 
-- **[next task] Add `member_a`/`member_b` → `legislators` foreign keys to
-  `vote_similarity`** (small `us-congress` DB migration). Brings it in line with
-  `member_party_agreement` so PostGraphile exposes `legislatorByMemberA` /
-  `legislatorByMemberB` — party + name come back inline in one query instead of a
-  separate lookup. Helps every consumer of the table, not just this question.
 - **Passthrough robustness.** `execute_graphql` returns whatever the query
   returns and #36 left no page-size cap, so a large connection can overflow the
   agent's context (observed: a full pairwise fetch had to be spilled to a file).
@@ -101,22 +89,25 @@ for a House congress) pairwise slice and joining party client-side.
 Each subsequent version is independently shippable and adds tools that fall
 into one of three categories:
 
-- **v0.2 — Discovery/lookup tools** (e.g. `find_legislator`, `find_bill`,
-  `find_vote`, `list_committees`): the tools an agent reaches for when it
-  doesn't yet know specific IDs.
-- **v0.3 — Per-entity detail tools** (e.g. `get_legislator`,
-  `get_vote_with_positions`, `get_bill`, `get_committee`): "give me
-  everything about this entity" — saves round-trips across joined tables.
-- **v0.4 — Aggregation/analysis tools** (e.g. `get_voting_record`,
-  `compare_voters`, `find_party_defectors`, and a cross-party
-  `most_agreeing_pairs`): tools that answer questions, not just retrieve data.
-  The pairwise aggregate these need is now deployed (`vote_similarity`), so they
-  no longer require new server-side aggregation — a curated tool does the party
-  lookup, the cross-party filter, the ordering and a top-N cap internally,
-  returning a small already-answered result instead of leaving the agent to
-  improvise (the failure mode the FK above + this tool together resolve).
+- **v0.2 — Discovery/lookup tools** (`find_legislator`, `find_vote`): the
+  tools an agent reaches for when it doesn't yet know specific IDs.
+- **v0.3 — Per-entity detail tools** (`get_legislator`,
+  `get_vote_with_positions`): "give me everything about this entity" — saves
+  round-trips across joined tables.
+- **v0.4 — Aggregation/analysis tools** (`get_voting_record`,
+  `compare_voters`, `find_party_defectors`, `most_agreeing_pairs`): tools that
+  answer questions, not just retrieve data.
 
-Past v0.4, the project's wishlist shifts back to improving GovQL itself
-(populating the bills/cosponsors/committees tables, a NL-query helper in
-the docs site, LLM-tuned schema descriptions) rather than expanding the
-MCP surface further.
+Past v0.4, the project's wishlist shifts back to improving GovQL itself first
+— populating the `bills`/`cosponsors`/`committees` tables, a NL-query helper
+in the docs site, LLM-tuned schema descriptions — rather than expanding the
+MCP surface further. That data work is what the relocated bill/committee
+tools below are waiting on.
+
+### Post-v0.4 (data-deferred)
+
+These are designed but held back by unpopulated data:
+
+- **`find_bill`, `list_committees`** (discovery) and **`get_bill`,
+  `get_committee`** (detail) — need the `bills`/`cosponsors`/`committees`
+  tables populated (the post-v0.4 GovQL data work).

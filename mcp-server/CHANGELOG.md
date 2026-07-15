@@ -4,11 +4,24 @@ All notable changes to `govql-mcp-server` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] — 2026-07-09
 
 ### Changed
 
 - Minimum supported Python raised to 3.13 (drops 3.10–3.12).
+
+### Added
+
+- `find_legislator` tool — discover members by `name`, `state`, `party`,
+  `chamber`, and `district` (matched against their terms), with `current_only`
+  (default) and a `limit`. Returns a compact list with each member's
+  `bioguideId` and current party/state/chamber/district.
+- `find_vote` tool — search roll-call votes by `topic` (free-text over the vote
+  question), `chamber`, `congress`, and `category`, newest first, with a `limit`.
+- Curated tools cap result size two ways: a `limit` (default 20, max 500) and a
+  response-byte guard that truncates oversized payloads and flags `truncated`.
+  Discovery results also report `total_matches` — how many rows match the filter
+  overall — so callers know when to refine or raise `limit`.
 
 ## [0.1.1] — 2026-07-03
 

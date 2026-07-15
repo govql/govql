@@ -14,4 +14,10 @@ mcp = FastMCP("govql", version=__version__)
 # Importing the tool modules runs their @mcp.tool decorators, registering them.
 # Imports are at the bottom to break the circular import between this module
 # and the tool modules (which import `mcp` from here).
-from .tools import describe_type, list_types, passthrough  # noqa: E402, F401
+from .tools import (  # noqa: E402, F401
+    describe_type,
+    find_legislator,
+    find_vote,
+    list_types,
+    passthrough,
+)
