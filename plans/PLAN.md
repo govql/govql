@@ -85,7 +85,7 @@ Durable decisions that apply across all tasks:
 ## Tasks
 
 - [x] 0001 · source_state cursor, fetch→load readiness, decoupled build stage → tasks/done/0001-source-state-cursor-decoupled-stages.md
-- [-] 0002 · Pipeline DAG manifest, generator + drift validator (after 0001) — ⏸ paused 2026-07-13, not ready → tasks/0002-pipeline-dag-manifest.md
+- [~] 0002 · Pipeline DAG manifest, generator + drift validator (after 0001) — resumed 2026-07-15 → tasks/0002-pipeline-dag-manifest.md
 - [x] 0003 · CI: build & push SHA-tagged images to GHCR → tasks/done/0003-ci-build-push-images.md
 - [x] 0004 · One-click production deploy + notifications (after 0003) → tasks/done/0004-one-click-production-deploy.md
 - [x] 0005 · Post-deploy external health check (after 0004) → tasks/done/0005-post-deploy-health-check.md
