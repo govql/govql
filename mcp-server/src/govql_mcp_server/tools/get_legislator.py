@@ -70,8 +70,11 @@ def _term(term: dict[str, Any]) -> dict[str, Any]:
 @mcp.tool
 async def get_legislator(
     bioguide_id: Annotated[
-        str, Field(description="The member's bioguide id (e.g. 'P000145'). Get one "
-                             "from find_legislator."),
+        str,
+        Field(
+            description="The member's bioguide id (e.g. 'P000145'). Get one "
+            "from find_legislator."
+        ),
     ],
 ) -> dict[str, Any]:
     """Return one member's identity and full term history.
@@ -82,10 +85,15 @@ async def get_legislator(
     the id doesn't exist.
     """
     if not bioguide_id or not bioguide_id.strip():
-        return {"data": None, "errors": [{"message": "bioguide_id must be a non-empty string"}]}
+        return {
+            "data": None,
+            "errors": [{"message": "bioguide_id must be a non-empty string"}],
+        }
 
     try:
-        result = await graphql_client.execute_graphql(_QUERY, {"id": bioguide_id.strip()})
+        result = await graphql_client.execute_graphql(
+            _QUERY, {"id": bioguide_id.strip()}
+        )
     except httpx.HTTPError as err:
         logger.warning("get_legislator transport failure: %s", err)
         return network_error_response(err)

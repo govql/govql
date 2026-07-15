@@ -132,7 +132,8 @@ def normalize_state(value: str | None) -> str | None:
 
 
 def normalize_position(value: str | None) -> str | None:
-    """Friendly position input -> canonical string ('Yea'/'Nay'/'Present'/'Not Voting')."""
+    """Friendly position input -> canonical string
+    ('Yea'/'Nay'/'Present'/'Not Voting')."""
     return _lookup(value, _POSITION, "position")
 
 

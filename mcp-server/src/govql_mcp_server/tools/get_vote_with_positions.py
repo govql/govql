@@ -51,34 +51,52 @@ def _build_query(include_positions: bool) -> str:
         if include_positions
         else "query GetVote($vid: String!)"
     )
-    return "%s {\n%s%s\n}" % (header, meta, _AGGS)
+    return f"{header} {{\n{meta}{_AGGS}\n}}"
 
 
 @mcp.tool
 async def get_vote_with_positions(
     vote_id: Annotated[
-        str, Field(description="The vote id (e.g. 's192-119.2026'). Get one from find_vote."),
+        str,
+        Field(
+            description="The vote id (e.g. 's192-119.2026'). Get one from find_vote."
+        ),
     ],
     include_positions: Annotated[
-        bool, Field(description="Include the per-member position list — returns the "
-                              "full roster (up to ~500, byte-guarded). Default "
-                              "false — tallies only."),
+        bool,
+        Field(
+            description="Include the per-member position list — returns the "
+            "full roster (up to ~500, byte-guarded). Default "
+            "false — tallies only."
+        ),
     ] = False,
     party: Annotated[
-        str | None, Field(description="Only positions from this party ('D'/'R'/'I'). "
-                                     "Implies include_positions."),
+        str | None,
+        Field(
+            description="Only positions from this party ('D'/'R'/'I'). "
+            "Implies include_positions."
+        ),
     ] = None,
     state: Annotated[
-        str | None, Field(description="Only positions from this state (2-letter). "
-                                     "Implies include_positions."),
+        str | None,
+        Field(
+            description="Only positions from this state (2-letter). "
+            "Implies include_positions."
+        ),
     ] = None,
     position: Annotated[
-        str | None, Field(description="Only this position: 'Yea','Nay','Present',"
-                                     "'Not Voting'. Implies include_positions."),
+        str | None,
+        Field(
+            description="Only this position: 'Yea','Nay','Present',"
+            "'Not Voting'. Implies include_positions."
+        ),
     ] = None,
     positions_limit: Annotated[
-        int | None, Field(description="Max positions returned; default = the full "
-                                     "roster (up to 500). Set lower to sample."),
+        int | None,
+        Field(
+            description="Max positions returned; default = the full "
+            "roster (up to 500). Set lower to sample."
+        ),
     ] = None,
 ) -> dict[str, Any]:
     """Return one roll-call vote with tallies, party breakdown, and optional
@@ -91,9 +109,14 @@ async def get_vote_with_positions(
     `data.vote` is null if the vote id doesn't exist.
     """
     if not vote_id or not vote_id.strip():
-        return {"data": None, "errors": [{"message": "vote_id must be a non-empty string"}]}
+        return {
+            "data": None,
+            "errors": [{"message": "vote_id must be a non-empty string"}],
+        }
 
-    want_positions = include_positions or any(v is not None for v in (party, state, position))
+    want_positions = include_positions or any(
+        v is not None for v in (party, state, position)
+    )
 
     try:
         pos_filter: dict[str, Any] = {}
@@ -114,7 +137,9 @@ async def get_vote_with_positions(
         )
 
     try:
-        result = await graphql_client.execute_graphql(_build_query(want_positions), variables)
+        result = await graphql_client.execute_graphql(
+            _build_query(want_positions), variables
+        )
     except httpx.HTTPError as err:
         logger.warning("get_vote_with_positions transport failure: %s", err)
         return network_error_response(err)
@@ -125,8 +150,15 @@ async def get_vote_with_positions(
     data = result["data"]
     vote = data.get("voteByVoteId")
     if vote is None:
-        return {"data": {"vote": None, "totals": {}, "party_breakdown": {},
-                         "positions": None, "truncated": False}}
+        return {
+            "data": {
+                "vote": None,
+                "totals": {},
+                "party_breakdown": {},
+                "positions": None,
+                "truncated": False,
+            }
+        }
     vote["chamber"] = display_chamber_code(vote.get("chamber"))
 
     totals = {r["position"]: r["positions"] for r in data["t"]["nodes"]}
@@ -152,5 +184,12 @@ async def get_vote_with_positions(
     else:
         vote.pop("votePositionsByVoteIdList", None)
 
-    return {"data": {"vote": vote, "totals": totals, "party_breakdown": breakdown,
-                     "positions": positions_out, "truncated": truncated}}
+    return {
+        "data": {
+            "vote": vote,
+            "totals": totals,
+            "party_breakdown": breakdown,
+            "positions": positions_out,
+            "truncated": truncated,
+        }
+    }
