@@ -31,6 +31,16 @@ async def execute_graphql(
     Tables for bills, cosponsors, committees, and committee memberships exist
     in the schema but are not yet populated.
 
+    Beyond the raw tables, GovQL precomputes the expensive cross-cutting
+    analytics as **derived views** — prefer these over pulling `VotePosition`
+    rows and aggregating yourself. The flagship two are `VoteSimilarity`
+    (pairwise agreement between two members in a congress — how often they cast
+    the same Yea/Nay) and `MemberPartyAgreement` (how often a member voted with
+    each party), alongside per-vote and per-member tally views. Before
+    hand-rolling any multi-row computation, call `list_types()` to see the full
+    set (each carries a description) and pick the view that already answers the
+    question.
+
     Common values to know (saves you a wrong-guess round-trip):
 
     - `Vote.category` is a lowercase string. Frequent values: `"nomination"`,

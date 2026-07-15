@@ -39,6 +39,22 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ### Added
 
+- **Legislator relations on `vote_similarity`**: `member_a` and `member_b` now have foreign keys to
+  `legislators`, so the API exposes `legislatorByMemberA` / `legislatorByMemberB` — each pair returns
+  the two members' names and other legislator details inline instead of bare bioguide IDs. The reverse
+  connections `voteSimilaritiesByMemberA` / `voteSimilaritiesByMemberB` are available on `Legislator`.
+  (A member's party is per-congress — see `member_party_agreement`, not `legislators`.) (#63)
+
+## 2026-06-29
+
+### Security
+
+- Hardened the service against automated abuse and probing. (#36)
+
+## [2026-06-25]
+
+### Added
+
 - **Member-vs-party voting agreement** via the `member_party_agreement` type: for each congress
   and chamber, how often a member voted with each party's majority position — `shared_votes`,
   `agreed`, and a precomputed `agreement_rate` (`agreed / shared_votes`, sortable via
@@ -46,7 +62,7 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
   measure). Maintained incrementally by the ingester across all congresses. (#49)
 
 
-## [2026-06-17] — Baseline
+## [2026-06-18] — Baseline
 
 First published changelog. Establishes the current public API as the starting point and records
 recent consumer-facing additions.

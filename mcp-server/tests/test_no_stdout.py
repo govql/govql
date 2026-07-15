@@ -12,7 +12,6 @@ import sys
 
 from tests.conftest import graphql_response, tool_payload
 
-
 _PACKAGE_MODULES = [
     "govql_mcp_server",
     "govql_mcp_server.__main__",

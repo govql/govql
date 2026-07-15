@@ -1,0 +1,442 @@
+name: us-congress
+
+# Build the four us-congress app images once, tag them by commit SHA, and push
+# to GHCR. On a PR the images are built but not pushed (a pre-merge build check);
+# on merge to main they are built and pushed. Only us-congress/ changes trigger
+# this, so an mcp-server or root-docs change does not rebuild the stack.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'us-congress/**'
+      - '.github/workflows/us-congress.yml'
+  pull_request:
+    paths:
+      - 'us-congress/**'
+      - '.github/workflows/us-congress.yml'
+  # Manual rollback / on-demand redeploy (task 0007): run the same gated deploy
+  # path against an arbitrary commit. It pulls that commit's retained images —
+  # no rebuild — so the images job is skipped and no digests are verified.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: >-
+          Full 40-hex commit SHA to (re)deploy. Rollback = an earlier known-good
+          commit; redeploy = the current commit. Pulls that commit's retained
+          images (no rebuild). NOTE: database migrations are forward-only — an
+          image rollback does NOT undo a schema change, and a schema-caused
+          failure may need hands-on intervention.
+        required: true
+        type: string
+
+# Deliberately minimal: packages: write is granted job-level to `images` only,
+# so a PR-triggered run of any other job never carries a token that could
+# overwrite GHCR tags.
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    # Secondary guard against a stamp→deploy loop: skip runs whose head commit
+    # is commit-changelog's stamp commit. The primary guard is that the
+    # built-in GITHUB_TOKEN's pushes never trigger workflow runs at all; this
+    # backstop holds even if that push token were ever swapped for a PAT.
+    # Everything that could loop (deploy, docs publish) needs this job, so
+    # skipping it kills the run. workflow.test.js pins the prefix to the
+    # message commit-changelog writes — change them together.
+    # A manual dispatch (rollback/redeploy) deploys retained images, so it must
+    # not rebuild — skip the whole job. deploy tolerates the skip (its `if`).
+    if: >-
+      github.event_name != 'workflow_dispatch' && (
+      github.event_name == 'pull_request' ||
+      !startsWith(github.event.head_commit.message, 'docs(us-congress): stamp changelog') )
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: scraper
+            context: us-congress
+            dockerfile: us-congress/scraper/Dockerfile
+          - name: ingester
+            context: us-congress/ingester
+            dockerfile: us-congress/ingester/Dockerfile
+          - name: server
+            context: us-congress/postgraphile-server
+            dockerfile: us-congress/postgraphile-server/Dockerfile
+          - name: nginx
+            context: us-congress
+            dockerfile: us-congress/nginx/Dockerfile
+    steps:
+      - uses: actions/checkout@v5
+
+      # Stamp the changelog's Unreleased section with today's America/Chicago
+      # date before the nginx image bakes the docs site, so the published site
+      # carries the date within the same deploy. The stamp input is main's
+      # current changelog, not this sha's copy: a re-run of an old sha (the
+      # redeploy path) must publish main's already-stamped state, not re-stamp
+      # old entries with the re-run date. Working-copy only — nothing reaches
+      # main unless the deploy proves healthy (commit-changelog).
+      - uses: actions/setup-node@v5
+        if: matrix.name == 'nginx' && github.event_name == 'push'
+        with:
+          node-version: 24
+      - name: Stamp changelog Unreleased section
+        if: matrix.name == 'nginx' && github.event_name == 'push'
+        run: |
+          git fetch --depth=1 origin main
+          git restore --source=FETCH_HEAD -- us-congress/CHANGELOG.md
+          cp us-congress/CHANGELOG.md changelog-input.md
+          # Stamp only when the changelog blob is identical between this sha
+          # and main's tip. A redeploy of an older sha (main's copy was
+          # stamped since) or a raced changelog merge must not assign today's
+          # date to entries whose code is not in this image; a race with a
+          # non-changelog merge stamps through. Unstamped means input ==
+          # output, so commit-changelog naturally has nothing to commit.
+          if [ "$(git rev-parse FETCH_HEAD:us-congress/CHANGELOG.md)" = "$(git rev-parse "$GITHUB_SHA:us-congress/CHANGELOG.md")" ]; then
+            node us-congress/deploy/stamp-changelog-run.js
+          else
+            echo "::warning::changelog differs between this sha and main's tip — publishing main's copy unstamped (redeploy of an older sha, or a changelog merge raced this run)"
+          fi
+
+      # Hand commit-changelog the exact stamped bytes (a re-stamp there could
+      # drift a day if the approval gate spans midnight in Chicago) plus the
+      # pre-stamp input its concurrent-edit guard diffs against.
+      - name: Upload stamped changelog
+        if: matrix.name == 'nginx' && github.event_name == 'push'
+        uses: actions/upload-artifact@v6
+        with:
+          name: stamped-changelog
+          path: |
+            us-congress/CHANGELOG.md
+            changelog-input.md
+          overwrite: true
+          retention-days: 90
+
+      # A docker-container builder is required for the gha cache backend below
+      # (the runner's default `docker` driver can't export a cache).
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Only needed to push (merges to main); PRs build without credentials.
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/govql/us-congress-${{ matrix.name }}
+          # Full 40-char commit SHA as the tag (prefix stripped) so the on-box
+          # deploy can derive the same tag from `git rev-parse HEAD`. Also tag
+          # `latest` on the default branch.
+          tags: |
+            type=sha,prefix=,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Rollback retention: every merge pushes an immutable SHA-tagged image and
+      # nothing here (or elsewhere in .github/) prunes GHCR, so prior SHA tags
+      # stay pullable — that is what a rollback (workflow_dispatch) relies on. Do
+      # not add a GHCR cleanup/retention action without excluding recent SHA
+      # tags, or it would delete rollback targets out from under the operator.
+      # (On-box disk is bounded separately by deploy/prune-images.sh, which keeps
+      # the current + previous SHA set. Full runbook: task 0008.)
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # GHCR tags are mutable; the digest is not. Record what was actually
+      # built so the deploy job can have the droplet verify the pulled images
+      # are byte-for-byte these — a tag overwritten between build and approval
+      # is refused on-box (deploy/deploy.sh).
+      - name: Record image digest
+        if: github.event_name == 'push'
+        run: echo "${{ matrix.name }} ${{ steps.build.outputs.digest }}" > "digest-${{ matrix.name }}.txt"
+
+      - name: Upload image digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v6
+        with:
+          name: digest-${{ matrix.name }}
+          path: digest-${{ matrix.name }}.txt
+          # overwrite: a "Re-run all jobs" re-uploads the same artifact name
+          # and would otherwise 409 — and re-running is the CI path to
+          # redeploying the current sha. 90 days: an environment approval can
+          # arrive up to 30 days after the run; the digests must outlive it.
+          overwrite: true
+          retention-days: 90
+
+  # The deploy invariant tests (us-congress/deploy) and the ingester suite.
+  # deploy waits on this job, so a PR that breaks an invariant — dropping the
+  # approval gate, referencing a new secret — fails before anything ships.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Deploy invariant tests
+        run: cd us-congress/deploy && npm ci && npm test
+      - name: Ingester tests
+        run: cd us-congress/ingester && npm ci && npm test
+
+  # Announce that a deploy is waiting for its one-click approval. Runs outside
+  # the production environment — a job inside it would itself wait on the
+  # approval — which is why SLACK_WEBHOOK_URL is a repo-level secret, not an
+  # environment secret. GitHub's native environment notification also fires.
+  # Waits on the tests too: if they fail, the deploy is skipped and never
+  # waits at the gate, so announcing it would be a false ping.
+  notify-pending:
+    needs: [images, test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Notify Slack — awaiting approval
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"⏳ govql production deploy awaiting approval: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
+
+  # Deploy: released by a one-click approval on the GitHub `production`
+  # environment (required reviewer = the manual gate; remove the reviewer in
+  # the environment settings to graduate to continuous deployment). SSHes to
+  # the droplet as the unprivileged govql user; the deploy key's forced
+  # command (deploy/ci-deploy.sh) validates the sha, checks it out, and runs
+  # deploy/deploy.sh, which pulls the SHA-tagged app images and refuses to
+  # start unless their digests match what the build job reported (stdin).
+  # The `environment:` key records each run as a GitHub deployment for the
+  # audit trail. CI holds no application secrets — only the deploy key and
+  # the Slack webhook; app secrets stay on the droplet in dotenvx.
+  deploy:
+    needs: [images, test]
+    # Runs on a merge to main (fresh build → images success) or a manual
+    # rollback/redeploy dispatch (retained images → images skipped). Never a PR.
+    # The skipped-images allowance is scoped to the dispatch: on a push, images
+    # is also skipped by the changelog-stamp loop backstop (see the images job),
+    # and deploy must stay dead in that case, so a push still requires images to
+    # have succeeded. Either way it waits on the production environment approval.
+    if: >-
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      (
+        (github.event_name == 'push' && needs.images.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && needs.images.result == 'skipped')
+      )
+    runs-on: ubuntu-latest
+    # Serialize deploys so two quick merges can't interleave on the droplet.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://govql.us
+    steps:
+      # For the post-deploy health-check poller (deploy/health-check-run.js).
+      # persist-credentials off: this job holds the production deploy key, and
+      # the checkout is read-only — no reason to leave the GITHUB_TOKEN in
+      # .git/config for later steps.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Set up the deploy key and pinned host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET_HOST_KEY: ${{ vars.DROPLET_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DROPLET_HOST_KEY" > ~/.ssh/known_hosts
+
+      # `required: true` is only enforced by the dispatch UI; an API/gh dispatch
+      # can still submit an empty or malformed sha. Reject it here rather than
+      # let TARGET_SHA fall back to github.sha and silently redeploy main's tip
+      # through the no-verification rollback path.
+      - name: Validate rollback target
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          if ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::rollback target must be a full 40-hex commit sha, got: '$TARGET_SHA'"
+            exit 1
+          fi
+
+      # A rollback/redeploy has no fresh build, so surface its scope — and the
+      # forward-only-migrations caveat — in the run summary for the record.
+      - name: Note rollback scope (forward-only migrations)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          {
+            echo "### Rollback / on-demand redeploy"
+            echo ""
+            echo "Deploying \`$TARGET_SHA\` by pulling its retained images — no rebuild."
+            echo ""
+            echo "⚠️ Database migrations are **forward-only**: an image rollback does **not** undo a schema change. A schema-caused failure may need hands-on intervention."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only a fresh build produces digest artifacts; a dispatch has none.
+      - name: Collect built image digests
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v7
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Deploy over SSH
+        env:
+          DROPLET_HOST: ${{ vars.DROPLET_HOST }}
+          TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+        # The remote side is the key's forced command (deploy/ci-deploy.sh). A
+        # push sends nothing but the target sha with the expected digests on
+        # stdin. A dispatch sends the `rollback <sha>` form: the forced command
+        # bypasses the ancestor guard, pulls the sha's retained images, and
+        # skips digest verification (no fresh build to compare against). The key
+        # can do nothing else either way.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
+              -o StrictHostKeyChecking=yes \
+              "govql@$DROPLET_HOST" \
+              "rollback $TARGET_SHA" < /dev/null
+          else
+            cat digests/*.txt > digests.txt
+            ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=$HOME/.ssh/known_hosts \
+              -o StrictHostKeyChecking=yes \
+              "govql@$DROPLET_HOST" \
+              "$TARGET_SHA" < digests.txt
+          fi
+
+      # The deploy verdict: probe the live public docs site and GraphQL API
+      # from the runner — the real DNS/TLS/nginx path, not container status —
+      # retrying for ~2 minutes so normal startup isn't a false failure. A
+      # non-zero exit fails this job, and notify-outcome reports it as ❌.
+      - name: Post-deploy external health check
+        run: node us-congress/deploy/health-check-run.js
+
+  # Report the deploy's outcome to Slack from a follow-up job, not steps in
+  # deploy itself: a deploy cancelled before it starts (superseded in the
+  # concurrency group, or rejected at the approval gate) never runs its
+  # steps, so only a needs:-dependent job with always() can report it.
+  # Skipped deploys (a failed test job) are deliberately quiet — no pending
+  # ping was sent for them either.
+  notify-outcome:
+    needs: [deploy]
+    if: >-
+      always() && github.event_name == 'push' &&
+      contains(fromJSON('["success", "failure", "cancelled"]'), needs.deploy.result)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RESULT: ${{ needs.deploy.result }}
+    steps:
+      - name: Notify Slack — deploy outcome
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          case "$RESULT" in
+            success)   text="✅ govql production deploy succeeded" ;;
+            failure)   text="❌ govql production deploy FAILED (or was rejected at the gate)" ;;
+            cancelled) text="⚪ govql production deploy cancelled (superseded or stopped)" ;;
+          esac
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"${text}: ${GITHUB_SHA} — ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL"
+
+  # Commit the stamped changelog back to main, but only after the deploy —
+  # health check included — succeeded; a failed deploy discards the stamp.
+  # The artifact carries the exact bytes the published docs image was built
+  # from. The push uses the built-in GITHUB_TOKEN (left in .git/config by
+  # checkout), whose pushes never trigger workflow runs — the primary guard
+  # against a re-deploy loop; the images job's commit-message skip is the
+  # backstop. The commit message prefix is load-bearing: the images guard and
+  # workflow.test.js both pin it.
+  commit-changelog:
+    needs: [deploy]
+    if: github.event_name == 'push' && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Check out the current tip of main, not the deployed sha: main may
+      # have advanced during the approval gate, and the push must fast-forward.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Download stamped changelog
+        uses: actions/download-artifact@v7
+        with:
+          name: stamped-changelog
+          path: stamped
+
+      - name: Commit the stamp to main
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # If the changelog moved on main since the stamp was taken (e.g. a
+          # changelog-only merge during the approval gate, or a prior queued
+          # deploy's stamp landing first), overwriting it would silently drop
+          # those entries. Skip — loudly, since the deploy shipped healthy but
+          # main stays unstamped. Known limitation, accepted: the skip
+          # self-heals at the next deploy, which re-stamps whatever Unreleased
+          # then holds — with a later date if that deploy crosses midnight.
+          if ! diff -q stamped/changelog-input.md us-congress/CHANGELOG.md > /dev/null; then
+            echo "::warning::changelog changed on main since the stamp was taken — commit-back skipped; the deploy shipped but main stays unstamped until the next deploy"
+            curl -fsS -X POST -H 'Content-type: application/json' \
+              --data "{\"text\":\"⚠️ govql deploy ${TARGET_SHA} is healthy, but the changelog stamp was NOT committed back (changelog moved on main) — ${RUN_URL}\"}" \
+              "$SLACK_WEBHOOK_URL" || true
+            exit 0
+          fi
+          mv stamped/us-congress/CHANGELOG.md us-congress/CHANGELOG.md
+          if git diff --quiet -- us-congress/CHANGELOG.md; then
+            echo "Unreleased was empty — nothing was stamped, nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add us-congress/CHANGELOG.md
+          git commit -m "docs(us-congress): stamp changelog for deploy $TARGET_SHA"
+          # A merge can land on main between checkout and push; one rebase
+          # retry covers it. If the rebase hits a conflict (that merge touched
+          # the changelog), fail loudly rather than force anything.
+          git push origin HEAD:main || {
+            git pull --rebase origin main
+            git push origin HEAD:main
+          }

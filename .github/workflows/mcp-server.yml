@@ -11,7 +11,36 @@ on:
       - 'mcp-server/**'
       - '.github/workflows/mcp-server.yml'
 
+# Least privilege: lint + test only need to read the repo. Declaring any
+# permissions block denies every scope not listed, so a PR-triggered run
+# carries no writable token. Jobs that need more (e.g. a release publish)
+# escalate per-job or in their own workflow.
+permissions:
+  contents: read
+
 jobs:
+  # Lint + format gate. Separate from `test` so the two failure modes report
+  # distinctly and run in parallel; the small duplicate `uv sync` is cheap given
+  # the cache. Ruff config (rules, line length, target-version) lives in
+  # pyproject.toml under [tool.ruff].
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version-file: mcp-server/.python-version
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     defaults:

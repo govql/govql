@@ -26,7 +26,9 @@ fresh follow-up issue.
   then opens the PR after approval and flips the pointer to `[>]`.
 - A pointer has four states: `[ ]` todo · `[~]` in progress (claimed) · `[>]` done,
   PR open, awaiting merge · `[x]` merged to `main`. `sync-main` flips `[>]→[x]` and
-  moves the task file to `tasks/done/` once the PR merges.
+  moves the task file to `tasks/done/` once the PR merges. A fifth marker `[-]` means
+  **paused / on hold** — deliberately not ready to pick up; selection skips it (it is
+  not `[ ]`) until it's flipped back to `[ ]`.
 - Pointers carry their direct prerequisites as an `(after NNNN, …)` suffix (none =
   no suffix). A task is selectable only once every ordinal in its `(after …)` list is
   `[x]` (merged).
@@ -66,10 +68,28 @@ Durable decisions that apply across all tasks:
   Adding a source or aggregation requires updating the manifest + regenerating
   (the ritual is recorded in `AGENTS.md`). Runnable via `npm run` only for now;
   CI/CD enforcement is a separate future issue.
+- **Deployment (continuous *delivery*)**: the `us-congress` stack ships via
+  merge-to-`main` → CI builds four immutable **SHA-tagged, public GHCR images**
+  (`scraper`, `ingester`, `server`, docs-baked-into-`nginx` multi-stage) → **one-click
+  GitHub `production` environment approval** → the droplet's unprivileged `govql` user
+  pulls the pinned images and `docker compose up -d` (systemd one-shot, compose
+  `restart: always` for crash recovery) → external health check → changelog stamped and
+  committed back. The droplet **never builds**; app secrets stay on the box in dotenvx
+  and **never enter CI**. Migrations remain **forward-only** (Flyway on `up`), so an image
+  rollback does not undo a schema change. The manual approval gate is deliberate (public
+  API, thin test coverage) and removable in one setting to graduate to continuous
+  deployment. Source PRD: [`plans/prds/us-congress-continuous-delivery.md`](prds/us-congress-continuous-delivery.md).
 
 ---
 
 ## Tasks
 
-- [>] 0001 · source_state cursor, fetch→load readiness, decoupled build stage → tasks/0001-source-state-cursor-decoupled-stages.md
-- [ ] 0002 · Pipeline DAG manifest, generator + drift validator (after 0001) → tasks/0002-pipeline-dag-manifest.md
+- [x] 0001 · source_state cursor, fetch→load readiness, decoupled build stage → tasks/done/0001-source-state-cursor-decoupled-stages.md
+- [-] 0002 · Pipeline DAG manifest, generator + drift validator (after 0001) — ⏸ paused 2026-07-13, not ready → tasks/0002-pipeline-dag-manifest.md
+- [x] 0003 · CI: build & push SHA-tagged images to GHCR → tasks/done/0003-ci-build-push-images.md
+- [x] 0004 · One-click production deploy + notifications (after 0003) → tasks/done/0004-one-click-production-deploy.md
+- [x] 0005 · Post-deploy external health check (after 0004) → tasks/done/0005-post-deploy-health-check.md
+- [x] 0006 · Automated changelog stamp (after 0004, 0005) → tasks/done/0006-changelog-stamp.md
+- [x] 0007 · Rollback & on-demand redeploy (after 0004) → tasks/done/0007-rollback-redeploy.md
+- [x] 0008 · Deployment docs & runbook (after 0004, 0005, 0006, 0007) → tasks/done/0008-deployment-docs.md
+- [x] 0009 · Target node24-runtime action versions in the workflow (after 0003, 0004, 0005, 0006, 0007) → tasks/done/0009-workflow-node24-actions.md

@@ -47,7 +47,7 @@ deliberate trade-off, weighed in the project's planning docs:
   schemas from Python type hints, which removes hundreds of lines of
   hand-written schema boilerplate that the TypeScript SDK would require.
 - FastMCP-Python ships an in-memory test client, so tests don't have to
-  spawn a subprocess and parse JSON-RPC manually. The whole 17-test suite
+  spawn a subprocess and parse JSON-RPC manually. The whole test suite
   runs in under a second.
 - The third-party `fastmcp` for TypeScript is a different author's wrapper
   that lags upstream — it didn't offer compelling enough ergonomics over
@@ -58,36 +58,56 @@ server has no runtime coupling to the JS backend, lives in a sibling
 directory at the repo root, and follows the conventions of a normal Python
 project (no shared linter, no shared lockfile, no proxied build commands).
 
-## Why no Dockerfile
-
-stdio MCP servers are spawned by the MCP client (Claude Desktop, Cursor,
-etc.) as a per-session subprocess. There is no long-running server to host.
-A Dockerfile would only be useful if a client wanted to run the server in
-a container, which is not how any current MCP client works. If demand
-emerges later we can publish a Docker image alongside the PyPI release;
-shipping one now would be cargo-cult engineering.
-
 ## Roadmap
 
-v0.1 ships the foundation. Each subsequent version is independently
-shippable and adds tools that fall into one of three categories:
+v0.1 ships the foundation. **v0.1.1** then closed a discoverability gap: with
+the derived analytics views now deployed in the data layer, `execute_graphql`
+points agents at them (`VoteSimilarity`, `MemberPartyAgreement`, and the
+per-vote / per-member tally views) so analytical questions use the precomputed
+views instead of brute-forcing over raw `VotePosition` rows.
 
-- **v0.2 — Discovery/lookup tools** (e.g. `find_legislator`, `find_bill`,
-  `find_vote`, `list_committees`): the tools an agent reaches for when it
-  doesn't yet know specific IDs.
-- **v0.3 — Per-entity detail tools** (e.g. `get_legislator`,
-  `get_vote_with_positions`, `get_bill`, `get_committee`): "give me
-  everything about this entity" — saves round-trips across joined tables.
-- **v0.4 — Aggregation/analysis tools** (e.g. `get_voting_record`,
-  `compare_voters`, `find_party_defectors`): tools that answer questions,
-  not just retrieve data.
+### Next up (before v0.2)
 
-The voting-similarity matrix is deliberately *not* on the v0.4 list because
-it needs server-side Postgres aggregation to avoid O(n²) hammering of the
-GraphQL API — that's a DB migration with its own scope and risk profile,
-and it can ship later under a separate plan.
+Testing v0.1.1 against the motivating question — *"which two opposing-party
+members vote together most often?"* — showed that the agent found
+`VoteSimilarity` but still fell back to fetching the whole (~96k-row for a
+House congress) pairwise slice and joining party client-side, because
+`vote_similarity` carried no relation back to `legislators` the way
+`member_party_agreement` did. `vote_similarity.member_a`/`member_b` now carry
+foreign keys to `legislators` (shipped in #63), so PostGraphile exposes
+`legislatorByMemberA` / `legislatorByMemberB` — party and name come back
+inline in one query instead of a separate lookup. That unblocks the
+cross-party `most_agreeing_pairs` tool (v0.4).
 
-Past v0.4, the project's wishlist shifts back to improving GovQL itself
-(populating the bills/cosponsors/committees tables, a NL-query helper in
-the docs site, LLM-tuned schema descriptions) rather than expanding the
-MCP surface further.
+- **Passthrough robustness.** `execute_graphql` returns whatever the query
+  returns and #36 left no page-size cap, so a large connection can overflow the
+  agent's context (observed: a full pairwise fetch had to be spilled to a file).
+  Add a docstring rule to use `orderBy` + a small `first:` for "top-N" questions,
+  and optionally a soft response-size guard that truncates + warns. Small
+  standalone MCP patch (behavior change → not folded into the docs-only v0.1.1).
+
+Each subsequent version is independently shippable and adds tools that fall
+into one of three categories:
+
+- **v0.2 — Discovery/lookup tools** (`find_legislator`, `find_vote`): the
+  tools an agent reaches for when it doesn't yet know specific IDs.
+- **v0.3 — Per-entity detail tools** (`get_legislator`,
+  `get_vote_with_positions`): "give me everything about this entity" — saves
+  round-trips across joined tables.
+- **v0.4 — Aggregation/analysis tools** (`get_voting_record`,
+  `compare_voters`, `find_party_defectors`, `most_agreeing_pairs`): tools that
+  answer questions, not just retrieve data.
+
+Past v0.4, the project's wishlist shifts back to improving GovQL itself first
+— populating the `bills`/`cosponsors`/`committees` tables, a NL-query helper
+in the docs site, LLM-tuned schema descriptions — rather than expanding the
+MCP surface further. That data work is what the relocated bill/committee
+tools below are waiting on.
+
+### Post-v0.4 (data-deferred)
+
+These are designed but held back by unpopulated data:
+
+- **`find_bill`, `list_committees`** (discovery) and **`get_bill`,
+  `get_committee`** (detail) — need the `bills`/`cosponsors`/`committees`
+  tables populated (the post-v0.4 GovQL data work).

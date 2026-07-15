@@ -54,6 +54,14 @@ hand once every referenced PR has merged.
 gh pr list --state all --search "#56 in:body"                          # issue -> PRs
 gh pr view <PR#> --json body --jq '[.body | scan("#[0-9]+")] | unique' # PR -> issue
 ```
+**Planning-tool artifacts (Superpowers etc.) go under `plans/`, never
+a root `docs/`.** Superpowers defaults to writing plans and specs into
+`docs/superpowers/{plans,specs}`, but a new top-level `docs/` at the repo root
+broke the on-box deploy (the `govql` user can't create a new entry at the root of
+`/opt/govql` — issue #85). Superpowers v5.0+ honors project instructions over its
+own defaults, so: **save Superpowers plans to `plans/superpowers/plans/` and specs to
+`plans/superpowers/specs/`.** A `.gitignore` guard (`/docs/`) backstops any
+pre-v5.0 client that ignores this.
 
 ## Repository map
 
@@ -90,10 +98,35 @@ The `us-congress` Postgres schema is managed with **Flyway**.
   a blanket `SELECT` plus `ALTER DEFAULT PRIVILEGES`. But any **new table holding
   secrets** must be explicitly `REVOKE`d (see `V002__grafana_reader_grants.sql`,
   which revokes `api_keys`).
-- **Deploying schema changes:** `git pull` then `docker compose up` — the gated
-  one-shot `flyway` service runs `migrate` and the API server restarts after it.
-  Existing databases were adopted with a one-time
-  `flyway baseline -baselineVersion=1`. Full dev/prod steps are in
+- **Deploying (one-click):** every change ships by merge to `main` → CI builds
+  SHA-tagged images → a one-click approval on the GitHub `production`
+  environment → the droplet checks out the commit and runs
+  `us-congress/deploy/deploy.sh` (pull + digest verify + `up -d`) → CI probes
+  the live docs site and GraphQL API from outside (retrying ~2 min,
+  `us-congress/deploy/health-check-run.js`) — that external health check is the
+  deploy verdict Slack reports, not just "containers started". After a healthy
+  deploy, CI stamps `us-congress/CHANGELOG.md`'s `Unreleased` section with the
+  America/Chicago date and commits it back to `main` (`commit-changelog` job).
+  Two loop guards keep that commit from re-deploying, and **both are
+  load-bearing**: the push uses the built-in `GITHUB_TOKEN` (its pushes never
+  trigger workflows), and the `images` job skips runs whose head commit starts
+  with `docs(us-congress): stamp changelog` — the message prefix, the guard,
+  and `workflow.test.js` pin each other; change them together. Never run a
+  bare `docker compose up` on the droplet — compose resolves `${IMAGE_TAG}` to
+  `latest` without the scripts; the manual path is
+  `us-congress/deploy/up.sh --pull`. Schema changes ride along: the gated
+  one-shot `flyway` service runs `migrate` on the way up and the API server
+  restarts after it (existing databases were adopted with a one-time
+  `flyway baseline -baselineVersion=1`). **Rollback / on-demand redeploy** is a
+  manual `workflow_dispatch` on the same gated deploy job, pointed at any prior
+  commit: it pulls that commit's retained SHA-tagged images (no rebuild) with the
+  digest gate relaxed — the production approval is the trust boundary — and the
+  droplet's forced command takes it via an explicit `rollback <sha>` form that
+  bypasses the ancestor-refusal guard (migrations are forward-only, so an image
+  rollback does not undo a schema change). Each deploy then prunes superseded
+  images (`us-congress/deploy/prune-images.sh`, keeping the current + previous
+  SHA set) so the droplet disk stays bounded; GHCR itself is never pruned, so
+  older images stay pullable for a rollback. Full dev/prod steps are in
   [`us-congress/README.md`](us-congress/README.md).
 - **Flyway image** is pinned to a specific version (`flyway/flyway:12.9.0-alpine`)
   for reproducible deploys — bump it deliberately, not via a floating tag.
