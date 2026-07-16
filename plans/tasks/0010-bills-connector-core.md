@@ -52,14 +52,23 @@ subjects, summaries) are task 0011. Durable decisions live in `plans/PLAN.md`
 
 ## Human-in-the-loop tasks
 
-- [ ] [verify] Provide the Congress.gov API key (local env + droplet dotenvx) and
+- [x] [verify] Provide the Congress.gov API key (local env + droplet dotenvx) and
       confirm a live fetch+load lands congress-119 bills queryable over GraphQL —
       needs a secret only the user holds and a live, rate-limited API.
+      **Verified 2026-07-16 (local)**: 17,495 congress-119 bills fetched (196 pages,
+      3 passes, verified), loaded with 0 failures, queryable over GraphQL with real
+      titles and latest actions. Crash-resume exercised live (network error at page
+      16 → rerun resumed from the committed 2025-12-05 cursor). Sponsors are not
+      populated — the list endpoint cannot supply them; deferred to task 0011's
+      per-bill detail calls. **Droplet dotenvx key still needs setting before the
+      production deploy.**
 
 ## Acceptance criteria
 
-- [ ] `bills` rows for congress 119 are populated from Congress.gov (real titles,
-      sponsors, latest actions — not just vote-stub rows) and queryable via GraphQL
+- [x] `bills` rows for congress 119 are populated from Congress.gov (real titles,
+      sponsors, latest actions — not just vote-stub rows) and queryable via GraphQL.
+      Verified live except sponsors: the bill-list endpoint does not carry sponsor
+      data (per-bill detail calls, task 0011) — see the [verify] note above.
 - [x] Killing the fetch mid-backfill and rerunning resumes from the last committed
       page — no restart from zero, no duplicate rows (unit-tested; also smoke-tested
       against a real Postgres)
