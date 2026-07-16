@@ -1,0 +1,127 @@
+name: mcp-server-release
+
+# Publishes govql-mcp-server to PyPI when a release tag is pushed, replacing
+# the manual `uv publish` runbook. The tag is the single source of truth for
+# the version being released: a guardrail fails the run if the tagged commit's
+# pyproject.toml or CHANGELOG.md disagrees with it. Publishing waits at the
+# `pypi` GitHub Environment's required-reviewer approval — the same one-click
+# gate pattern as the us-congress production deploy. Runbook:
+# mcp-server/RELEASE.md.
+on:
+  push:
+    tags:
+      - 'govql-mcp-server-v*'
+
+# Least privilege: building needs only repo read. The publish job escalates
+# per-job (OIDC token for PyPI, contents write for the GitHub Release).
+permissions:
+  contents: read
+
+jobs:
+  # Build the sdist + wheel once and hand them to publish as an artifact, so
+  # what gets approved at the gate is byte-for-byte what was built here —
+  # nothing is rebuilt after approval.
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v5
+
+      # The release invariant: tag, pyproject.toml, and CHANGELOG must agree.
+      # Catches the classic drift (version bump forgotten before tagging, or
+      # a missing CHANGELOG entry) before anything is built, let alone
+      # published. tomllib ships with the runner's system Python (3.11+), so
+      # no uv sync is needed for this check.
+      - name: Verify tag matches pyproject.toml and CHANGELOG
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#govql-mcp-server-v}"
+          PYPROJECT_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::tag says ${TAG_VERSION} but pyproject.toml says ${PYPROJECT_VERSION} — bump pyproject.toml (and CHANGELOG.md), merge, then re-tag"
+            exit 1
+          fi
+          if ! grep -qF "## [${TAG_VERSION}]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no entry for ${TAG_VERSION} — every release documents itself"
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version-file: mcp-server/.python-version
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v6
+        with:
+          name: dist
+          path: mcp-server/dist/
+          if-no-files-found: error
+          # An approval can arrive up to 30 days after the tag push; the
+          # artifact must outlive the wait at the gate.
+          retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # The manual gate: `pypi` is a GitHub Environment with a required
+    # reviewer, so the run pauses here for a one-click approval before
+    # anything reaches PyPI. The environment name is also part of the Trusted
+    # Publisher registration on PyPI — an upload from any other environment
+    # (or workflow, or repo) is refused server-side.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/govql-mcp-server/
+    permissions:
+      # OIDC: lets this job mint the short-lived identity token that PyPI's
+      # Trusted Publishing exchanges for a scoped upload token — no
+      # long-lived API token stored in the repo.
+      id-token: write
+      # For creating the GitHub Release below.
+      contents: write
+    steps:
+      # Checkout before downloading the artifact: checkout cleans the
+      # workspace when it initializes, so dist/ would be wiped if fetched
+      # first. The checkout itself is only for CHANGELOG.md (release notes).
+      - uses: actions/checkout@v5
+
+      # dist/ at the workspace root is the publish action's default
+      # packages-dir; drop the built artifact straight into it.
+      - name: Download distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+
+      # Trusted Publishing (OIDC): the action authenticates as this repo +
+      # workflow + environment (as registered on PyPI), verifies the package
+      # metadata, uploads, and generates PEP 740 attestations — all by
+      # default. release/v1 is the action's maintained stable branch, its
+      # documented pin (it publishes no major-version tag like the actions/*
+      # family). TestPyPI rehearsal: uncomment repository-url and follow
+      # RELEASE.md's rehearsal section.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # with:
+        #   repository-url: https://test.pypi.org/legacy/
+
+      # The GitHub Release mirrors PyPI — created only after the upload
+      # succeeds, with the version's CHANGELOG section as the notes and the
+      # published files attached for the audit trail.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#govql-mcp-server-v}"
+          awk -v heading="## [${VERSION}]" '
+            index($0, heading) == 1 { found = 1; next }
+            /^## \[/ { found = 0 }
+            found
+          ' mcp-server/CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "govql-mcp-server v${VERSION}" \
+            --notes-file notes.md
