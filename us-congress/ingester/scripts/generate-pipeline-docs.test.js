@@ -1,7 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { parseCrontab, collectTableNames, renderPipelineMd, runCheck, loadInputs } from './generate-pipeline-docs.mjs';
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'generate-pipeline-docs.mjs');
+
+import {
+  parseCrontab,
+  collectTableNames,
+  renderPipelineMd,
+  runCheck,
+  loadInputs,
+  crontabFilesFor,
+  KNOWN_CRONTABS,
+} from './generate-pipeline-docs.mjs';
 import { nodes as realNodes } from '../pipeline.manifest.js';
 
 // Crontabs and migrations consistent with makeNodes().
@@ -86,6 +101,45 @@ test('parseCrontab handles system cron.d format (SHELL= line, user field folded 
   assert.ok(jobs[1].command.includes('update-legislators.sh'));
 });
 
+test('crontabFilesFor always includes the known crontabs, even when no node references one', () => {
+  const nodes = makeNodes().filter((n) => n.trigger.cron.file !== 'scraper/scrape_cron');
+  const files = crontabFilesFor(nodes);
+  assert.ok(files.includes('ingester/ingest_cron'));
+  assert.ok(files.includes('scraper/scrape_cron'));
+  assert.deepEqual(KNOWN_CRONTABS, ['ingester/ingest_cron', 'scraper/scrape_cron']);
+});
+
+test('crontabFilesFor unions in crontab files only the manifest knows about', () => {
+  const nodes = makeNodes();
+  nodes[0].trigger.cron.file = 'api/cleanup_cron';
+  assert.deepEqual(crontabFilesFor(nodes).sort(), ['api/cleanup_cron', 'ingester/ingest_cron', 'scraper/scrape_cron']);
+});
+
+test('parseCrontab parses @-keyword shorthand schedules instead of dropping them', () => {
+  const text = '@daily root /usr/local/bin/new-job.sh\n@reboot echo hi\n';
+  const jobs = parseCrontab(text);
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0].schedule, '@daily');
+  assert.ok(jobs[0].command.includes('new-job.sh'));
+  assert.equal(jobs[1].schedule, '@reboot');
+});
+
+test('collectTableNames handles lowercase, IF NOT EXISTS, schema-qualified, and quoted names', () => {
+  const sql = [
+    'create table foo (\n  x INT\n);',
+    'CREATE TABLE public.votes (\n  y INT\n);',
+    'CREATE TABLE IF NOT EXISTS "quoted_name" (\n  z INT\n);',
+  ].join('\n');
+  assert.deepEqual([...collectTableNames(sql)].sort(), ['foo', 'quoted_name', 'votes']);
+});
+
+test('runCheck reports a node missing trigger.cron instead of crashing', () => {
+  const nodes = makeNodes();
+  delete nodes[1].trigger.cron;
+  const errors = runCheck(makeInputs(nodes));
+  assert.ok(errors.some((e) => /ingest-widgets.*missing trigger\.cron/.test(e)));
+});
+
 test('collectTableNames finds every CREATE TABLE across concatenated migration SQL', () => {
   const sql = [
     'CREATE TABLE votes (',
@@ -124,6 +178,24 @@ test('runCheck fails when a manifest node has no matching crontab line', () => {
   assert.equal(errors.length, 1);
   assert.match(errors[0], /ingest-widgets/);
   assert.match(errors[0], /found 0/);
+});
+
+test('runCheck fails when two manifest nodes claim the same crontab line', () => {
+  const nodes = makeNodes();
+  nodes.push({
+    ...nodes[1],
+    id: 'ingest-widgets-copy',
+    upstream: [],
+    trigger: {
+      ...nodes[1].trigger,
+      // Same file and schedule; a different substring of the same job command.
+      cron: { ...nodes[1].trigger.cron, match: 'node src/ingest-widgets.js' },
+    },
+  });
+  const errors = runCheck(makeInputs(nodes));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /ingest-widgets-copy/);
+  assert.match(errors[0], /already claimed/);
 });
 
 test('runCheck fails when a crontab job has no manifest node', () => {
@@ -201,4 +273,29 @@ test('the real manifest names the five pipeline nodes', () => {
 
 test('the real repo is drift-free: manifest ↔ crontabs ↔ migrations ↔ committed PIPELINE.md', () => {
   assert.deepEqual(runCheck(loadInputs()), []);
+});
+
+test('CLI: --check exits 0 on the consistent real repo', () => {
+  const result = spawnSync(process.execPath, [SCRIPT, '--check'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /consistent/);
+});
+
+test('CLI: --check exits non-zero on a drifted repo, printing the errors', () => {
+  // A fixture us-congress root whose crontabs and migrations are empty: every
+  // manifest node fails its cron match, every table is missing, and there is
+  // no PIPELINE.md.
+  const root = mkdtempSync(join(tmpdir(), 'pipeline-docs-drift-'));
+  mkdirSync(join(root, 'ingester'), { recursive: true });
+  mkdirSync(join(root, 'scraper'), { recursive: true });
+  mkdirSync(join(root, 'db/migrations'), { recursive: true });
+  writeFileSync(join(root, 'ingester/ingest_cron'), '# empty\n');
+  writeFileSync(join(root, 'scraper/scrape_cron'), '# empty\n');
+  const result = spawnSync(process.execPath, [SCRIPT, '--check'], {
+    encoding: 'utf8',
+    env: { ...process.env, PIPELINE_DOCS_ROOT: root },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /found 0/);
+  assert.match(result.stderr, /PIPELINE\.md is stale/);
 });

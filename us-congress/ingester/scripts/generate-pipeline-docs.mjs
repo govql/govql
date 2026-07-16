@@ -13,7 +13,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { nodes } from '../pipeline.manifest.js';
 
 // scripts/ lives in us-congress/ingester/; everything is relative to us-congress/.
-const US_CONGRESS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../..');
+// PIPELINE_DOCS_ROOT overrides the root so tests can point --check at a fixture.
+const US_CONGRESS_DIR = process.env.PIPELINE_DOCS_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), '../..');
 const MIGRATIONS_DIR = join(US_CONGRESS_DIR, 'db/migrations');
 const PIPELINE_MD = join(US_CONGRESS_DIR, 'PIPELINE.md');
 
@@ -31,13 +32,30 @@ export function parseCrontab(text) {
     if (trimmed === '' || trimmed.startsWith('#')) continue;
     if (/^\w+=/.test(trimmed)) continue; // environment assignment (SHELL=...)
     const fields = trimmed.split(/\s+/);
-    if (fields.length < 6) continue;
+    // @-keyword shorthand (@daily, @reboot, …): the keyword is the schedule.
+    const scheduleFields = fields[0].startsWith('@') ? 1 : 5;
+    if (fields.length < scheduleFields + 1) continue;
     jobs.push({
-      schedule: fields.slice(0, 5).join(' '),
-      command: fields.slice(5).join(' '),
+      schedule: fields.slice(0, scheduleFields).join(' '),
+      command: fields.slice(scheduleFields).join(' '),
     });
   }
   return jobs;
+}
+
+/**
+ * Every crontab file --check validates: the fixed set of known crontabs (so a
+ * file whose nodes were all removed from the manifest still gets its jobs
+ * flagged as unclaimed) plus any file a node references.
+ */
+export const KNOWN_CRONTABS = ['ingester/ingest_cron', 'scraper/scrape_cron'];
+
+export function crontabFilesFor(nodes) {
+  const files = new Set(KNOWN_CRONTABS);
+  for (const node of nodes) {
+    if (node.trigger?.cron?.file) files.add(node.trigger.cron.file);
+  }
+  return [...files];
 }
 
 /**
@@ -67,7 +85,12 @@ export function runCheck({ nodes, crontabs, migrationsSql, committedDoc }) {
   const claimed = new Map(); // crontab file -> Set of claimed job indexes
   for (const file of Object.keys(crontabs)) claimed.set(file, new Set());
   for (const node of nodes) {
+    if (!node.trigger?.cron) {
+      errors.push(`node '${node.id}': missing trigger.cron`);
+      continue;
+    }
     const { file, schedule, match } = node.trigger.cron;
+    if (!claimed.has(file)) claimed.set(file, new Set());
     const jobs = parseCrontab(crontabs[file] ?? '');
     const hits = jobs
       .map((job, i) => ({ job, i }))
@@ -76,6 +99,13 @@ export function runCheck({ nodes, crontabs, migrationsSql, committedDoc }) {
       errors.push(
         `node '${node.id}': expected exactly one ${file} line with schedule '${schedule}' ` +
           `and command containing '${match}', found ${hits.length}`,
+      );
+      continue;
+    }
+    if (claimed.get(file)?.has(hits[0].i)) {
+      errors.push(
+        `node '${node.id}': its ${file} line ('${schedule} …${match}…') is already claimed by another node — ` +
+          `every job line must belong to exactly one node`,
       );
       continue;
     }
@@ -146,8 +176,8 @@ export function renderPipelineMd(nodes) {
     const list = (xs) => xs.map((x) => `\`${cell(x)}\``).join('<br/>');
     lines.push(
       `| \`${node.id}\` | ${node.stage} | ${node.domain} ` +
-        `| \`${node.trigger.cron.schedule}\` (${cell(node.trigger.cron.file)}) ` +
-        `| ${cell(node.trigger.readiness ?? '— (producer)')} ` +
+        `| ${node.trigger?.cron ? `\`${node.trigger.cron.schedule}\` (${cell(node.trigger.cron.file)})` : '—'} ` +
+        `| ${cell(node.trigger?.readiness ?? '— (producer)')} ` +
         `| ${list(node.reads)} | ${list(node.writes)} ` +
         `| \`${cell(node.watermark.table)}\` (${cell(node.watermark.key)}) — advances ${cell(node.watermark.advances)} ` +
         `| ${cell(node.idempotency)} |`,
@@ -164,7 +194,7 @@ export function renderPipelineMd(nodes) {
  */
 export function collectTableNames(sql) {
   const tables = new Set();
-  for (const m of sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g)) {
+  for (const m of sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(?:"?\w+"?\.)?"?(\w+)"?/gi)) {
     tables.add(m[1]);
   }
   return tables;
@@ -173,9 +203,11 @@ export function collectTableNames(sql) {
 /** Assemble runCheck's inputs from the real repo files. */
 export function loadInputs() {
   const crontabs = {};
-  for (const node of nodes) {
-    const file = node.trigger.cron.file;
-    crontabs[file] ??= readFileSync(join(US_CONGRESS_DIR, file), 'utf8');
+  for (const file of crontabFilesFor(nodes)) {
+    const path = join(US_CONGRESS_DIR, file);
+    // A manifest-referenced file that doesn't exist reads as empty, so the
+    // node's cron match fails with a drift error instead of a crash.
+    crontabs[file] = existsSync(path) ? readFileSync(path, 'utf8') : '';
   }
   const migrationsSql = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
