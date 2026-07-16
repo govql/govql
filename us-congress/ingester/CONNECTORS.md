@@ -41,19 +41,37 @@ import them; import the connector module instead.
 Staged cursors live in `source_state` (see the master plan's "Staged cursors" and
 "Gating rule" decisions):
 
-- **Fetch cursor** — for API sources, the max consumed source watermark (bills: the
-  max `updateDate`), advanced **in the same transaction as each committed page** of
-  raw payloads, so a crash resumes from the last committed page. Backfill is the same
-  code with a NULL starting cursor. The key is **per discovery unit** (bills:
-  `congress-bills-<congress>`) so retargeting the config knob starts a fresh backfill
-  instead of filtering behind another unit's watermark. File sources instead have the
-  scraper write `now()` on success.
+- **Fetch cursors (a pair per discovery unit)** — API sources keep two watermarks in
+  `source_state`, keyed per discovery unit (bills: `congress-bills-<congress>`, so
+  retargeting the config knob starts a fresh backfill instead of filtering behind
+  another unit's watermark):
+  - `fetch` — the **resume** position: the max consumed source watermark (bills: max
+    `updateDate`), advanced **in the same transaction as each committed page** of raw
+    payloads and **monotonic** (never regresses), so a crash resumes from the last
+    committed page and a verification re-walk can't rewind it. Backfill is the same
+    code with a NULL starting cursor.
+  - `fetch_verified` — the **verified-through** position: advanced only after a clean
+    verification pass (below). A crash or pass-cap leaves it behind, and the next run
+    resumes verification from it.
+
+  File sources instead have the scraper write `now()` to a single `fetch` cursor on
+  success.
 - **Skip-proofing offset pagination** — an offset walk over a mutating, ascending
   sort can skip an item across a page boundary (an already-consumed row gets bumped
-  to the tail; everything after it shifts one position earlier). Multi-page runs
-  therefore **re-walk from the run's starting cursor until a pass writes nothing
-  new** (`fetchPagesUntilClean`); idempotent, diff-guarded upserts make the overlap
-  cost API calls only.
+  to the tail; everything after it shifts one position earlier), leaving its
+  watermark behind the resume cursor. So each run does a catch-up pass from `fetch`,
+  then — whenever the catch-up was multi-page or `fetch` sits ahead of
+  `fetch_verified` — **re-walks from `fetch_verified` until a pass writes nothing
+  new**, and only then advances `fetch_verified` (`fetchPagesUntilClean`, capped at 5
+  passes per run). Idempotent, diff-guarded upserts make every re-walk cost API calls
+  only, and nothing can hide behind the resume cursor across crashes.
+- **One fetch run at a time** — fetch entrypoints take a `pg_try_advisory_lock` keyed
+  on the source and skip loudly if another run holds it. `fetched_at` is
+  transaction-start `now()`, so overlapping fetch runs could commit rows behind an
+  already-advanced load cursor.
+- **Grace-capped load advance** — for the same reason, the load never advances its
+  cursor into the last few minutes (`capWatermark`): an in-flight fetch page
+  transaction gets time to land, and the clamped tail is simply re-read next run.
 - **Load readiness** — an opaque/external input (files) gets the fetch↔load cursor
   handshake (`loadReadiness` in `cursor-state.js`); an **owned DB table** like
   `raw_payloads` gets a **staleness comparison** against its watermark (bills:

@@ -32,6 +32,16 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+### Added
+
+- **Congress.gov bill data**: bills are now ingested hourly from the Congress.gov API (starting
+  with congress 119), so `Bill` rows carry real data instead of vote-stub placeholders. New
+  fields on `Bill`: `title` (Congress.gov's display title, distinct from the existing
+  `officialTitle`/`shortTitle`/`popularTitle`), `latestAction` and `latestActionAt` (the most
+  recent action's text and date), and `policyArea` (present in the schema now; populated when
+  per-bill detail ingestion lands). `sourceUpdatedAt` reflects the Congress.gov update
+  timestamp. (#89)
+
 ## [2026-07-14]
 
 ### Added

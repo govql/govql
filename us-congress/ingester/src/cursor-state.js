@@ -49,21 +49,42 @@ export async function readCursor(client, sourceName, stage) {
   return rows.length ? rows[0].cursor : null;
 }
 
-/**
- * Advance the `fetch` cursor for a source. Used by API-source fetchers
- * (Congress.gov bills) that track their own watermark — the max consumed
- * source updateDate — advanced inside the same transaction as each committed
- * page of raw payloads, so a crash resumes from the last committed page.
- * (File-source fetch cursors are written by the scraper's shell script instead.)
- */
-export async function advanceFetchCursor(client, sourceName, value) {
+// Monotonic upsert shared by the API-fetcher cursor writers below: only ever
+// advance, never regress. A verification re-walk runs anchored at an older
+// cursor value; without the guard, a crash mid-re-walk would persist that
+// regressed value and the next run would restart near zero.
+async function advanceMonotonic(client, sourceName, stage, value) {
   await client.query(
     `INSERT INTO source_state (source_name, stage, cursor, updated_at)
-     VALUES ($1, 'fetch', $2, now())
+     VALUES ($1, '${stage}', $2, now())
      ON CONFLICT (source_name, stage)
-       DO UPDATE SET cursor = EXCLUDED.cursor, updated_at = now()`,
+       DO UPDATE SET cursor = EXCLUDED.cursor, updated_at = now()
+       WHERE source_state.cursor IS NULL OR EXCLUDED.cursor > source_state.cursor`,
     [sourceName, value],
   );
+}
+
+/**
+ * Advance the `fetch` cursor for a source — the RESUME position. Used by
+ * API-source fetchers (Congress.gov bills) that track their own watermark —
+ * the max consumed source updateDate — advanced inside the same transaction as
+ * each committed page of raw payloads, so a crash resumes from the last
+ * committed page. Monotonic (see above). (File-source fetch cursors are
+ * written by the scraper's shell script instead.)
+ */
+export async function advanceFetchCursor(client, sourceName, value) {
+  await advanceMonotonic(client, sourceName, 'fetch', value);
+}
+
+/**
+ * Advance the `fetch_verified` cursor — the VERIFIED-THROUGH position. Only
+ * called after a clean verification re-walk (a pass that wrote nothing new),
+ * so a crashed or pass-capped verification leaves it behind and the next run
+ * re-walks from it; no offset-pagination boundary skip can hide behind the
+ * resume cursor. Monotonic.
+ */
+export async function advanceVerifiedFetchCursor(client, sourceName, value) {
+  await advanceMonotonic(client, sourceName, 'fetch_verified', value);
 }
 
 /**

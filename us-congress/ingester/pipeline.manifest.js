@@ -96,13 +96,13 @@ export const nodes = [
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '5 * * * *', match: 'src/fetch-bills.js' },
       readiness:
-        'loud clean skip when CONGRESS_GOV_API_KEY is unset; otherwise pages fromDateTime = fetch cursor (NULL cursor = backfill), re-walking multi-page runs until a pass writes nothing new (offset-pagination skip-proofing)',
+        'loud clean skip when CONGRESS_GOV_API_KEY is unset or another fetch run holds the pg advisory lock; otherwise a catch-up pass from the fetch cursor (NULL = backfill), then verification re-walks from the fetch_verified cursor until a pass writes nothing new (offset-pagination skip-proofing, crash-safe)',
     },
     watermark: {
       table: 'source_state',
-      key: "source_name='congress-bills-<congress>', stage='fetch' (per target congress)",
+      key: "source_name='congress-bills-<congress>', stages 'fetch' (resume) + 'fetch_verified' (verified-through), per target congress",
       advances:
-        'to the max consumed updateDate, in the same transaction as each committed page of raw_payloads (crash resumes from the last committed page)',
+        "'fetch' to the max consumed updateDate per committed page (monotonic; crash resumes from the last committed page); 'fetch_verified' only after a clean verification pass",
     },
     idempotency:
       'raw_payloads ON CONFLICT (source_name, natural_key, endpoint) DO UPDATE, guarded by payload IS DISTINCT FROM so unchanged bills do not touch fetched_at',
@@ -122,7 +122,8 @@ export const nodes = [
     watermark: {
       table: 'source_state',
       key: "source_name='congress-bills', stage='load'",
-      advances: 'to the max consumed raw_payloads.fetched_at, atomically with the ingestion_runs success row',
+      advances:
+        'to the max consumed raw_payloads.fetched_at — grace-capped a few minutes before the run so in-flight fetch transactions can land — atomically with the ingestion_runs success row',
     },
     idempotency:
       'bills ON CONFLICT (bill_id) DO UPDATE (enriches vote-stub rows; identity columns never change)',

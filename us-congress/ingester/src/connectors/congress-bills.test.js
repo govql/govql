@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
+  capWatermark,
   fetchPagesIntoRaw,
   fetchPagesUntilClean,
   fetchStateName,
@@ -146,50 +147,158 @@ test('fetchPagesIntoRaw commits each page atomically: raw upserts + fetch-cursor
   assert.deepEqual(client.calls[6].params, ['congress-bills-119', '2025-04-03']);
 });
 
-test('fetchPagesUntilClean re-walks from the starting cursor until a pass writes nothing new', async () => {
-  // Pass 1: two pages, both bills new (boundary skips possible). Pass 2: the
-  // same two pages, nothing changed → converged. Offset pagination over a
-  // mutating updateDate sort can skip a boundary item; the clean re-walk from
-  // the SAME starting fromDateTime catches it (idempotent upserts make the
-  // overlap free).
+// Stub client for fetchPagesUntilClean runs: serves the resume ('fetch') and
+// verified ('fetch_verified') cursors to readCursor, canned rowCounts to raw
+// upserts, and records every source_state write.
+function cursorAwareClient({ resume = null, verified = null, rawRowCount = () => 1 } = {}) {
+  const calls = [];
+  let rawWrites = 0;
+  return {
+    calls,
+    query(text, params) {
+      calls.push({ text, params });
+      if (/FROM source_state/i.test(text)) {
+        const cursor = params[1] === 'fetch' ? resume : verified;
+        return Promise.resolve({ rows: cursor === null ? [] : [{ cursor }] });
+      }
+      if (/INSERT INTO raw_payloads/i.test(text)) {
+        rawWrites += 1;
+        return Promise.resolve({ rows: [], rowCount: rawRowCount(rawWrites) });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    },
+  };
+}
+
+function verifiedWrites(client) {
+  return client.calls.filter((c) => /'fetch_verified'/.test(c.text) && /INSERT INTO source_state/i.test(c.text));
+}
+
+test('fetchPagesUntilClean: multi-page pass triggers a verification re-walk from the VERIFIED cursor, then advances it', async () => {
+  // Prior state verified (resume == verified). Pass 1 from the resume cursor
+  // is multi-page (boundary skips possible); the verification pass re-walks
+  // from the verified cursor and finds nothing new → verified advances.
+  const anchor = '2025-04-01T00:00:00.000000Z';
   const pageOne = { bills: [fixture.bills[0]], pagination: { count: 2, next: 'x' } };
   const pageTwo = { bills: [fixture.bills[1]], pagination: { count: 2 } };
   const { urls, fetchImpl } = stubFetch([pageOne, pageTwo, pageOne, pageTwo]);
-
-  let rawWrites = 0;
-  const client = stubClient((text) => {
-    if (!/INSERT INTO raw_payloads/i.test(text)) return { rows: [], rowCount: 1 };
-    rawWrites += 1;
-    return { rows: [], rowCount: rawWrites <= 2 ? 1 : 0 }; // pass 2 payloads identical
+  const client = cursorAwareClient({
+    resume: anchor,
+    verified: anchor,
+    rawRowCount: (n) => (n <= 2 ? 1 : 0), // verification pass: payloads identical
   });
 
+  const pageEvents = [];
   const result = await fetchPagesUntilClean({
     client,
     congress: 119,
     apiKey: 'k',
-    fromDateTime: '2025-04-01T00:00:00Z',
     limit: 1,
     fetchImpl,
+    onPage: (p) => pageEvents.push(p),
   });
 
   assert.equal(result.passes, 2);
-  assert.equal(result.upserted, 2);
+  assert.equal(result.verified, true);
+  assert.equal(result.upserted, 2); // distinct bills, not per-pass double counts
   assert.equal(result.unchanged, 2);
   assert.equal(urls.length, 4);
-  // Both passes anchor at the run's starting cursor, offset 0.
   for (const i of [0, 2]) {
     const u = new URL(urls[i]);
     assert.equal(u.searchParams.get('fromDateTime'), '2025-04-01T00:00:00Z');
     assert.equal(u.searchParams.get('offset'), '0');
   }
+  // onPage events carry the pass number so run logs are unambiguous.
+  assert.deepEqual(pageEvents.map((p) => p.pass), [1, 1, 2, 2]);
+  // The verified cursor advances exactly once, to the final resume position.
+  const vw = verifiedWrites(client);
+  assert.equal(vw.length, 1);
+  assert.deepEqual(vw[0].params, ['congress-bills-119', '2025-04-03']);
 });
 
-test('fetchPagesUntilClean stops after one pass when the run fit in a single page', async () => {
-  // A single-page run has no page boundary to skip across — no re-walk.
+test('fetchPagesUntilClean: single-page pass on a verified baseline skips verification and advances the verified cursor', async () => {
+  const anchor = '2025-04-01T00:00:00.000000Z';
   const { urls, fetchImpl } = stubFetch([{ bills: [fixture.bills[0]], pagination: { count: 1 } }]);
-  const result = await fetchPagesUntilClean({ client: stubClient(), congress: 119, apiKey: 'k', fetchImpl });
+  const client = cursorAwareClient({ resume: anchor, verified: anchor });
+
+  const result = await fetchPagesUntilClean({ client, congress: 119, apiKey: 'k', fetchImpl });
+
   assert.equal(result.passes, 1);
+  assert.equal(result.verified, true);
   assert.equal(urls.length, 1);
+  assert.equal(verifiedWrites(client).length, 1);
+});
+
+test('fetchPagesUntilClean: a resume cursor ahead of the verified cursor forces verification even for a single-page pass', async () => {
+  // The previous run crashed (or was capped) mid-verification: resume moved,
+  // verified did not. This run must re-walk from the verified cursor even
+  // though its own catch-up pass was trivially small.
+  const resume = '2025-04-03T00:00:00.000000Z';
+  const verified = '2025-04-01T00:00:00.000000Z';
+  const emptyPage = { bills: [], pagination: { count: 0 } };
+  const fullPage = { bills: [fixture.bills[0], fixture.bills[1]], pagination: { count: 2 } };
+  const { urls, fetchImpl } = stubFetch([emptyPage, fullPage]);
+  const client = cursorAwareClient({ resume, verified, rawRowCount: () => 0 });
+
+  const result = await fetchPagesUntilClean({ client, congress: 119, apiKey: 'k', fetchImpl });
+
+  assert.equal(result.passes, 2);
+  assert.equal(result.verified, true);
+  assert.equal(new URL(urls[0]).searchParams.get('fromDateTime'), '2025-04-03T00:00:00Z');
+  assert.equal(new URL(urls[1]).searchParams.get('fromDateTime'), '2025-04-01T00:00:00Z');
+  // Clean verification → verified catches up to the resume position.
+  const vw = verifiedWrites(client);
+  assert.equal(vw.length, 1);
+  assert.deepEqual(vw[0].params, ['congress-bills-119', resume]);
+});
+
+test('fetchPagesUntilClean: hitting the pass cap leaves the verified cursor untouched for the next run', async () => {
+  // Every pass keeps finding changes → cap fires. The verified cursor must NOT
+  // advance: the next hourly run re-walks from it, so nothing is stranded.
+  const pageOne = { bills: [fixture.bills[0]], pagination: { count: 2, next: 'x' } };
+  const pageTwo = { bills: [fixture.bills[1]], pagination: { count: 2 } };
+  const { fetchImpl } = stubFetch([pageOne, pageTwo, pageOne, pageTwo]);
+  const client = cursorAwareClient({ resume: null, verified: null, rawRowCount: () => 1 });
+
+  const warnings = [];
+  const result = await fetchPagesUntilClean({
+    client,
+    congress: 119,
+    apiKey: 'k',
+    limit: 1,
+    fetchImpl,
+    maxPasses: 2,
+    log: (m) => warnings.push(m),
+  });
+
+  assert.equal(result.passes, 2);
+  assert.equal(result.verified, false);
+  assert.equal(verifiedWrites(client).length, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /did not converge/);
+});
+
+test('capWatermark bounds the load-cursor advance: never past the grace cap, never backwards', () => {
+  const loadCursor = '2026-07-15T09:00:00.000000Z';
+  const graceCap = '2026-07-15T10:15:00.000000Z';
+  // Normal: consumed below the cap → advance to consumed.
+  assert.equal(
+    capWatermark({ consumed: '2026-07-15T10:00:00.000000Z', graceCap, loadCursor }),
+    '2026-07-15T10:00:00.000000Z',
+  );
+  // Consumed inside the grace window (in-flight fetch transactions may still
+  // land behind it) → clamp to the cap.
+  assert.equal(
+    capWatermark({ consumed: '2026-07-15T10:19:00.000000Z', graceCap, loadCursor }),
+    graceCap,
+  );
+  // Clamp would regress an already-ahead cursor → keep the cursor.
+  assert.equal(
+    capWatermark({ consumed: '2026-07-15T10:19:00.000000Z', graceCap: '2026-07-15T08:00:00.000000Z', loadCursor }),
+    loadCursor,
+  );
+  // Nothing consumed → cursor unchanged.
+  assert.equal(capWatermark({ consumed: null, graceCap, loadCursor }), loadCursor);
 });
 
 test('fetchPagesIntoRaw: a crash mid-run keeps earlier pages committed, and the rerun resumes from the committed cursor', async () => {

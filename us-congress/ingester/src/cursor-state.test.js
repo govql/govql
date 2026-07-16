@@ -5,6 +5,7 @@ import {
   isReady,
   readCursor,
   advanceFetchCursor,
+  advanceVerifiedFetchCursor,
   advanceLoadCursor,
   loadReadiness,
 } from './cursor-state.js';
@@ -86,12 +87,15 @@ test('advanceLoadCursor: upserts the captured fetch value into the load stage', 
   assert.deepEqual(params, ['congress-votes', value]);
 });
 
-test('advanceFetchCursor: upserts the consumed source watermark into the fetch stage', async () => {
+test('advanceFetchCursor: upserts the consumed source watermark into the fetch stage, monotonically', async () => {
   // An API-source fetcher (Congress.gov bills) advances its own fetch cursor to
-  // the max consumed source updateDate, per committed page.
+  // the max consumed source updateDate, per committed page. The write is
+  // monotonic — a verification re-walk anchored at an older cursor must never
+  // regress the persisted resume position (a crash mid-re-walk would otherwise
+  // restart the next run near zero).
   const value = '2026-07-01';
   const client = stubClient();
-  await advanceFetchCursor(client, 'congress-bills', value);
+  await advanceFetchCursor(client, 'congress-bills-119', value);
 
   assert.equal(client.calls.length, 1);
   const { text, params } = client.calls[0];
@@ -99,7 +103,25 @@ test('advanceFetchCursor: upserts the consumed source watermark into the fetch s
   assert.match(text, /ON CONFLICT/i);
   // Pin the stage literal, mirroring the advanceLoadCursor pin above.
   assert.match(text, /'fetch'/);
-  assert.deepEqual(params, ['congress-bills', value]);
+  // Pin the monotonic guard: only advance, never regress.
+  assert.match(text, /WHERE source_state\.cursor IS NULL OR EXCLUDED\.cursor > source_state\.cursor/i);
+  assert.deepEqual(params, ['congress-bills-119', value]);
+});
+
+test('advanceVerifiedFetchCursor: upserts the verified-through watermark, monotonically', async () => {
+  // 'fetch_verified' records how far a clean verification re-walk has proven
+  // complete; it only advances after such a pass, so a crashed or capped
+  // verification leaves it behind and the next run re-walks from it.
+  const value = '2026-07-01';
+  const client = stubClient();
+  await advanceVerifiedFetchCursor(client, 'congress-bills-119', value);
+
+  assert.equal(client.calls.length, 1);
+  const { text, params } = client.calls[0];
+  assert.match(text, /INSERT INTO source_state/i);
+  assert.match(text, /'fetch_verified'/);
+  assert.match(text, /WHERE source_state\.cursor IS NULL OR EXCLUDED\.cursor > source_state\.cursor/i);
+  assert.deepEqual(params, ['congress-bills-119', value]);
 });
 
 test('loadReadiness: reads fetch then load and reports ready + captured fetch', async () => {

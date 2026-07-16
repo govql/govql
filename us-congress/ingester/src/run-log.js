@@ -1,8 +1,10 @@
 // Shared ingestion_runs logging, extracted as part of the source-connector
 // contract (see CONNECTORS.md). Mirrors the open/succeed/fail lifecycle the
-// existing stages write inline: a 'running' row at start, closed atomically
-// with the stage's cursor advance on success (call succeedRun inside that
-// transaction), or marked failed from the stage's catch block.
+// existing stages write inline: a 'running' row at start, closed on success
+// or marked failed from the stage's catch block. LOAD stages call succeedRun
+// inside the same transaction as their cursor advance (the two must never
+// disagree); FETCH stages advance their cursor per committed page instead,
+// so they close the run outside any transaction as plain bookkeeping.
 //
 // Pool-free like cursor-state.js — takes a client, unit-testable with stubs.
 

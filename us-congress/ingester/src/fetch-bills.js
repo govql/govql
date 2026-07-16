@@ -21,7 +21,7 @@ import { pool } from './db.js';
 import { logger } from './logger.js';
 import { readCursor } from './cursor-state.js';
 import { openRun, succeedRun, failRun } from './run-log.js';
-import { fetchPagesUntilClean, fetchStateName, toFromDateTime } from './connectors/congress-bills.js';
+import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, toFromDateTime } from './connectors/congress-bills.js';
 
 const API_KEY = process.env.CONGRESS_GOV_API_KEY;
 const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS ?? '119', 10);
@@ -37,32 +37,49 @@ async function run() {
 
   const client = await pool.connect();
   let runId;
+  let locked = false;
 
   try {
+    // Serialize fetch runs: raw_payloads.fetched_at is transaction-start
+    // now(), so two overlapping runs could commit rows behind a load cursor
+    // that already advanced past them. Skip-if-locked keeps a long backfill
+    // from being overlapped by the next hourly cron.
+    const { rows: lockRows } = await client.query(
+      `SELECT pg_try_advisory_lock(hashtext($1)) AS locked`,
+      [SOURCE_NAME],
+    );
+    locked = lockRows[0].locked;
+    if (!locked) {
+      logger.warn('Bills fetch skipped — another bills fetch run holds the advisory lock (still in progress)');
+      return;
+    }
+
     // The fetch cursor is keyed per congress, so retargeting
     // CONGRESS_GOV_TARGET_CONGRESS starts that congress's own backfill instead
-    // of filtering behind another congress's watermark.
+    // of filtering behind another congress's watermark. Read here for the run
+    // record; fetchPagesUntilClean manages the resume/verified pair itself.
     const fromDateTime = toFromDateTime(await readCursor(client, fetchStateName(TARGET_CONGRESS), 'fetch'));
     runId = await openRun(client, 'bills_fetch', { congress: TARGET_CONGRESS, fromDateTime });
 
-    const { passes, pages, upserted, unchanged, cursor } = await fetchPagesUntilClean({
+    const { passes, pages, upserted, unchanged, cursor, verified } = await fetchPagesUntilClean({
       client,
       congress: TARGET_CONGRESS,
       apiKey: API_KEY,
-      fromDateTime,
       log: (msg) => logger.warn(msg),
       onPage: (p) =>
         logger.info(
-          `Bills fetch page ${p.pages} committed — upserted: ${p.upserted}, ` +
+          `Bills fetch pass ${p.pass} page ${p.pages} committed — upserted: ${p.upserted}, ` +
           `unchanged: ${p.unchanged}, cursor: ${p.cursor}`,
         ),
     });
 
     // The fetch cursor already advanced per committed page; closing the run is
     // bookkeeping only, so it needs no shared transaction with the cursor.
+    // `upserted` is the distinct-key count across passes.
     await succeedRun(client, runId, upserted);
     logger.info(
-      `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes}, pages: ${pages}, ` +
+      `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes} ` +
+      `(${verified ? 'verified' : 'NOT verified — next run re-walks'}), pages: ${pages}, ` +
       `upserted: ${upserted}, unchanged: ${unchanged}, cursor: ${cursor ?? 'none'}`,
     );
 
@@ -74,6 +91,9 @@ async function run() {
     if (runId) await failRun(client, runId, err.message).catch(() => {});
     process.exit(1);
   } finally {
+    if (locked) {
+      await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [SOURCE_NAME]).catch(() => {});
+    }
     client.release();
     await pool.end();
   }

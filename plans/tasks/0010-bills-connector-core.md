@@ -142,3 +142,25 @@ Review-fix round (same day, user-approved: all four majors + the security minor)
   can no longer strand a bill behind the advanced cursor.
 - Congress.gov API key moved from the `api_key` URL parameter to the `X-Api-Key`
   header.
+
+Review-fix round 2 (same day, user-approved: everything round 2 found):
+
+- **Two fetch watermarks per congress** (migration V006 adds a `fetch_verified`
+  stage to `source_state`): `fetch` is the resume position — per-page, now
+  **monotonic** so a crashed verification re-walk can't rewind it; `fetch_verified`
+  advances only after a clean verification pass. Verification always re-walks from
+  `fetch_verified`, so a crash or 5-pass cap leaves it behind and the next hourly
+  run resumes verification — no bill can be stranded behind the resume cursor.
+  (Fixes both the cursor-regression and the crash-safety findings; the spec's
+  "resume from last committed page" guarantee holds for landing new data, while
+  verification re-walk cost after a crash is API calls only.)
+- **Advisory lock** (`pg_try_advisory_lock` keyed on the source) serializes fetch
+  runs — skip-if-locked with a loud log; **grace cap** (`capWatermark`, 5 minutes)
+  keeps the load cursor out of the window where in-flight fetch transactions could
+  still commit rows behind it. Together they close the fetched_at concurrency hole.
+- `CHANGELOG.md` `[Unreleased]` entry added for the new `Bill` fields and the
+  Congress.gov data source (#89).
+- `run-log.js` header corrected (load closes the run atomically with its cursor;
+  fetch closes it as bookkeeping).
+- Run stats de-noised: `records_upserted` is now the distinct-key count across
+  verification passes, and page logs carry the pass number.

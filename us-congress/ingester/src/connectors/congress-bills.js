@@ -6,7 +6,7 @@
 // it can be unit-tested with stub clients and a stubbed fetch; the thin cron
 // entrypoints (src/fetch-bills.js, src/ingest-bills.js) do the wiring.
 
-import { advanceFetchCursor } from '../cursor-state.js';
+import { advanceFetchCursor, advanceVerifiedFetchCursor, readCursor } from '../cursor-state.js';
 
 export const SOURCE_NAME = 'congress-bills';
 
@@ -122,6 +122,7 @@ export async function fetchPagesIntoRaw({
   baseUrl = DEFAULT_BASE_URL,
   fetchImpl = fetch,
   onPage = () => {},
+  upsertedKeys = null, // optional Set: collects distinct written natural keys across passes
 }) {
   let cursor = fromDateTime;
   let pages = 0;
@@ -135,16 +136,21 @@ export async function fetchPagesIntoRaw({
     await client.query('BEGIN');
     try {
       for (const item of bills) {
+        const key = naturalKey(item);
         const { rowCount } = await client.query(
           `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
            VALUES ($1, $2, $3, $4, now())
            ON CONFLICT (source_name, natural_key, endpoint)
              DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
              WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
-          [SOURCE_NAME, naturalKey(item), LIST_ENDPOINT, JSON.stringify(item)],
+          [SOURCE_NAME, key, LIST_ENDPOINT, JSON.stringify(item)],
         );
-        if (rowCount === 1) upserted += 1;
-        else unchanged += 1;
+        if (rowCount === 1) {
+          upserted += 1;
+          upsertedKeys?.add(key);
+        } else {
+          unchanged += 1;
+        }
       }
       const pageMax = maxUpdateDate(bills, cursor);
       if (pageMax !== null && pageMax !== cursor) {
@@ -164,43 +170,117 @@ export async function fetchPagesIntoRaw({
 }
 
 /**
- * Fetch with skip-proofing. Offset pagination over an updateDate-ascending
- * sort is not stable while the list mutates: if Congress.gov bumps an
- * already-consumed bill mid-run, every later item shifts one position earlier
- * and the item straddling the next page boundary is silently skipped — then
- * the advanced cursor excludes it from future runs. So after any multi-page
- * pass that wrote something, re-walk from the SAME starting fromDateTime until
- * a pass writes nothing new (idempotent, diff-guarded upserts make the overlap
- * cost API calls only). A single-page pass has no boundary to skip across and
- * needs no re-walk. Cursor regression during a re-walk is safe — a lower
- * cursor only ever over-fetches.
+ * Fetch with crash-safe skip-proofing, built on two source_state watermarks
+ * per congress:
+ *
+ *  - `fetch` — the RESUME position: max consumed updateDate, advanced per
+ *    committed page (monotonic), so a kill mid-walk resumes from the last
+ *    committed page.
+ *  - `fetch_verified` — the VERIFIED-THROUGH position: advanced only after a
+ *    clean verification pass, i.e. a re-walk that wrote nothing new.
+ *
+ * Why: offset pagination over an updateDate-ascending sort is not stable
+ * while the list mutates — if Congress.gov bumps an already-consumed bill
+ * mid-run, every later item shifts one position earlier and the item
+ * straddling the next page boundary is silently skipped, with an updateDate
+ * already behind the resume cursor. The run therefore does a catch-up pass
+ * from the resume cursor, then (whenever the catch-up was multi-page, or a
+ * previous run left resume ahead of verified) re-walks from the VERIFIED
+ * cursor until a pass writes nothing new. Only then does verified catch up.
+ * A crash or pass-cap leaves verified behind, so the next run re-walks from
+ * it — nothing can hide behind the resume cursor. Idempotent, diff-guarded
+ * upserts make every re-walk cost API calls only.
+ *
+ * Returns distinct written keys as `upserted` (a payload changing twice
+ * across passes is one record, not two).
  */
-export async function fetchPagesUntilClean({ maxPasses = 5, log = () => {}, ...opts }) {
+export async function fetchPagesUntilClean({
+  client,
+  congress,
+  apiKey,
+  limit = DEFAULT_PAGE_SIZE,
+  baseUrl = DEFAULT_BASE_URL,
+  fetchImpl = fetch,
+  onPage = () => {},
+  maxPasses = 5,
+  log = () => {},
+}) {
+  const stateName = fetchStateName(congress);
+  const resume = await readCursor(client, stateName, 'fetch');
+  const verified = await readCursor(client, stateName, 'fetch_verified');
+
+  const upsertedKeys = new Set();
   let passes = 0;
   let pages = 0;
-  let upserted = 0;
   let unchanged = 0;
-  let cursor = opts.fromDateTime ?? null;
+  let cursor = resume;
 
-  for (;;) {
-    const result = await fetchPagesIntoRaw(opts);
+  const runPass = async (anchor) => {
     passes += 1;
+    const pass = passes;
+    const anchorFormatted = toFromDateTime(anchor);
+    const result = await fetchPagesIntoRaw({
+      client,
+      congress,
+      apiKey,
+      limit,
+      baseUrl,
+      fetchImpl,
+      fromDateTime: anchorFormatted,
+      upsertedKeys,
+      onPage: (p) => onPage({ ...p, pass }),
+    });
     pages += result.pages;
-    upserted += result.upserted;
     unchanged += result.unchanged;
-    cursor = result.cursor ?? cursor;
+    // Merge only a real advance: a pass that fetched nothing echoes its anchor
+    // back in truncated API format, and comparing that against the
+    // full-precision cursor string would clobber it (lexically 'Z' > '.').
+    if (result.cursor !== null && result.cursor !== anchorFormatted && (cursor === null || result.cursor > cursor)) {
+      cursor = result.cursor;
+    }
+    return result;
+  };
 
-    if (result.pages <= 1 || result.upserted === 0) break;
+  // Catch-up pass from the resume position.
+  const first = await runPass(resume);
+
+  // Verification is owed when this run's catch-up could have boundary-skipped
+  // (multi-page), or when a previous run left the resume cursor ahead of the
+  // verified cursor (its verification crashed or hit the cap).
+  let owesVerification = first.pages > 1 || resume !== verified;
+  while (owesVerification) {
     if (passes >= maxPasses) {
       log(
         `Bills fetch verification did not converge after ${passes} passes — ` +
-        `proceeding; the next hourly run re-checks from the advanced cursor`,
+        `the verified cursor stays behind and the next run resumes verification from it`,
       );
-      break;
+      return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: false };
     }
+    const pass = await runPass(verified);
+    owesVerification = pass.upserted > 0;
   }
 
-  return { passes, pages, upserted, unchanged, cursor };
+  if (cursor !== null) await advanceVerifiedFetchCursor(client, stateName, cursor);
+  return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: true };
+}
+
+/**
+ * Bound the load-cursor advance. `consumed` is the max fetched_at the load
+ * just processed; `graceCap` is a short interval before the load run started.
+ * raw_payloads.fetched_at is transaction-start now(), so a fetch page
+ * transaction still in flight while the load reads can commit rows dated
+ * BEHIND the load's consumed max — advancing past them would strand those
+ * rows forever (the payload-diff guard never bumps an unchanged row's
+ * fetched_at). Clamping the advance to the grace cap leaves in-flight
+ * transactions time to land; clamped rows are simply re-read next run
+ * (idempotent upserts). Never regresses an already-ahead cursor.
+ */
+export function capWatermark({ consumed, graceCap, loadCursor }) {
+  if (consumed === null) return loadCursor;
+  let value = consumed;
+  if (graceCap !== null && value > graceCap) value = graceCap;
+  if (loadCursor !== null && value < loadCursor) value = loadCursor;
+  return value;
 }
 
 /**
