@@ -4,13 +4,16 @@
  * Fetch stage for the `congress-bills` source: pages the Congress.gov bill-list
  * endpoint for the configured congress into raw_payloads. First API-source
  * implementer of the connector contract (see CONNECTORS.md) — unlike the
- * scraped file sources, this stage writes its own `fetch` cursor in
- * source_state (keyed per congress): the max consumed updateDate, advanced
- * inside the same transaction as each committed page, so a kill mid-backfill
- * resumes from the last committed page. Backfill is this same code with a NULL
- * starting cursor. Multi-page runs re-walk from the starting cursor until a
- * pass writes nothing new, so offset-pagination boundary skips can't drop a
- * bill behind the advanced cursor.
+ * scraped file sources, this stage writes its own cursors in source_state
+ * (keyed per congress): the `fetch` resume cursor is the max consumed
+ * updateDate, advanced inside the same transaction as each committed page, so
+ * a kill mid-backfill resumes from the last committed page; backfill is this
+ * same code with a NULL starting cursor. Whenever the catch-up pass was
+ * multi-page, was truncated, or the resume cursor sits ahead of the
+ * `fetch_verified` cursor (an earlier run's verification crashed or capped),
+ * the run re-walks from `fetch_verified` until a complete pass writes nothing
+ * new — only then does `fetch_verified` advance. Offset-pagination boundary
+ * skips therefore can't strand a bill behind the cursors, even across crashes.
  *
  * Config: CONGRESS_GOV_API_KEY (required — without it the run is a loud,
  * clean skip so the cron never crashes) and CONGRESS_GOV_TARGET_CONGRESS

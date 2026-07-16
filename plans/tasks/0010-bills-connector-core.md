@@ -64,7 +64,10 @@ subjects, summaries) are task 0011. Durable decisions live in `plans/PLAN.md`
       page — no restart from zero, no duplicate rows (unit-tested; also smoke-tested
       against a real Postgres)
 - [x] Rerunning fetch+load with nothing new upstream is a cheap no-op (payload-diff
-      guard on the raw upsert leaves `fetched_at` untouched; verified in the smoke run)
+      guard on the raw upsert leaves `fetched_at` untouched; verified in the smoke run).
+      Bounded exception since round 2's grace cap: a load rerun within 5 minutes of a
+      fetch re-reads the clamped tail once (idempotent upserts), then converges — the
+      steady-state hourly cadence (fetch :05, load :20) never enters the window.
 - [x] `PIPELINE.md` shows the two new nodes; pipeline `--check` is green locally
       (CI runs the same suite)
 - [ ] PR says `Part of #89` and closes nothing (#56 and #89 are tracking issues)
@@ -164,3 +167,19 @@ Review-fix round 2 (same day, user-approved: everything round 2 found):
   fetch closes it as bookkeeping).
 - Run stats de-noised: `records_upserted` is now the distinct-key count across
   verification passes, and page logs carry the pass number.
+
+Review-fix round 3 (2026-07-16, user-approved: everything round 3 found):
+
+- Load stage serialized with its own advisory lock (`congress-bills-load`) and
+  `advanceLoadCursor` made monotonic via the shared guard — overlapping load runs
+  can no longer regress the cursor or double-count runs.
+- A fetch/verification pass now reports whether it walked to the API's true end
+  (`complete`); a pass truncated by an anomalous empty-page-with-`next` no longer
+  counts as clean, so `fetch_verified` can't advance over territory never re-walked.
+- `transform` requires strictly numeric number/congress (`/^\d+$/`) — `"12A"` used
+  to parseInt to 12 and clobber the real bill row.
+- Stale docs trued up: `COMMENT ON TABLE bills` restated in V005 (no longer "not a
+  comprehensive bill database"), `COMMENT ON TABLE source_state` restated in V006
+  (three stages), `fetch-bills.js` header describes the two-cursor design, PLAN.md
+  "Staged cursors" decision records the API-source watermark pair, and the cheap
+  no-op acceptance note carries the grace-window exception (above).

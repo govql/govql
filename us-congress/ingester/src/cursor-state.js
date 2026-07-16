@@ -49,10 +49,11 @@ export async function readCursor(client, sourceName, stage) {
   return rows.length ? rows[0].cursor : null;
 }
 
-// Monotonic upsert shared by the API-fetcher cursor writers below: only ever
-// advance, never regress. A verification re-walk runs anchored at an older
-// cursor value; without the guard, a crash mid-re-walk would persist that
-// regressed value and the next run would restart near zero.
+// Monotonic upsert shared by every cursor writer below: only ever advance,
+// never regress. For fetch cursors, a verification re-walk runs anchored at an
+// older value — without the guard, a crash mid-re-walk would persist that
+// regressed value and the next run would restart near zero. For load cursors,
+// the guard keeps an overlapping slower run from rewinding a faster one.
 async function advanceMonotonic(client, sourceName, stage, value) {
   await client.query(
     `INSERT INTO source_state (source_name, stage, cursor, updated_at)
@@ -91,16 +92,12 @@ export async function advanceVerifiedFetchCursor(client, sourceName, value) {
  * Advance the `load` cursor for a source to the `fetch` value the run just
  * consumed. Called only after a successful run, so a crash mid-run leaves the
  * cursor unadvanced and the next run re-checks readiness and re-walks
- * idempotently.
+ * idempotently. Monotonic: if two load runs ever overlap (a manual run beside
+ * the cron), the slower one must not regress the cursor the faster one
+ * already advanced.
  */
 export async function advanceLoadCursor(client, sourceName, value) {
-  await client.query(
-    `INSERT INTO source_state (source_name, stage, cursor, updated_at)
-     VALUES ($1, 'load', $2, now())
-     ON CONFLICT (source_name, stage)
-       DO UPDATE SET cursor = EXCLUDED.cursor, updated_at = now()`,
-    [sourceName, value],
-  );
+  await advanceMonotonic(client, sourceName, 'load', value);
 }
 
 /**

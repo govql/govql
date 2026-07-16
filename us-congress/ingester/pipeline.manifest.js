@@ -117,7 +117,7 @@ export const nodes = [
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '20 * * * *', match: 'src/ingest-bills.js' },
       readiness:
-        "staleness gate on the owned raw_payloads table: runs iff max(fetched_at) > load.cursor (or load.cursor unset), for 'congress-bills' (rawReadiness)",
+        "skip if another load run holds the pg advisory lock; otherwise staleness gate on the owned raw_payloads table: runs iff max(fetched_at) > load.cursor (or load.cursor unset), for 'congress-bills' (rawReadiness)",
     },
     watermark: {
       table: 'source_state',

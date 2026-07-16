@@ -69,9 +69,11 @@ test('readCursor: returns the cursor as a full-precision string, null when absen
   assert.equal(await readCursor(absent, 'congress-votes', 'load'), null);
 });
 
-test('advanceLoadCursor: upserts the captured fetch value into the load stage', async () => {
+test('advanceLoadCursor: upserts the captured fetch value into the load stage, monotonically', async () => {
   // The captured value is the full-precision string from readCursor, written back
-  // verbatim so load equals the consumed fetch value to the microsecond.
+  // verbatim so load equals the consumed fetch value to the microsecond. The
+  // write is monotonic: two overlapping load runs must not let the slower one
+  // regress the cursor the faster one already advanced.
   const value = '2026-06-30T12:35:00.905108Z';
   const client = stubClient();
   await advanceLoadCursor(client, 'congress-votes', value);
@@ -84,6 +86,7 @@ test('advanceLoadCursor: upserts the captured fetch value into the load stage', 
   // 'fetch'. The stage is hardcoded (not a param), so without this a regression
   // flipping it to 'fetch' would corrupt the handshake yet pass every other check.
   assert.match(text, /'load'/);
+  assert.match(text, /WHERE source_state\.cursor IS NULL OR EXCLUDED\.cursor > source_state\.cursor/i);
   assert.deepEqual(params, ['congress-votes', value]);
 });
 

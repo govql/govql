@@ -54,10 +54,18 @@ Durable decisions that apply across all tasks:
 - **Staged cursors**: ingestion is modeled as three decoupled, independently-gated,
   independently-watermarked stages — `fetch` (scrape) → `load` (ingest raw) →
   `build` (aggregates). A generic `source_state(source_name, stage, cursor TIMESTAMPTZ)`
-  table holds the `fetch`/`load` cursors. **Readiness handshake**: `load.cursor` = the
+  table holds the cursors. **Readiness handshake** (file sources): `load.cursor` = the
   `fetch.cursor` value the load has fully consumed (read at start, written on success);
   load runs iff `fetch.cursor > load.cursor` (or `load.cursor IS NULL`). The `build`
   stage keeps its existing per-congress `vote_similarity_state` watermark.
+  **API sources** (task 0010) keep a watermark *pair* per discovery unit instead of a
+  single fetch cursor: `fetch` is the per-page monotonic resume position, and
+  `fetch_verified` advances only after a clean verification re-walk — offset
+  pagination over a mutating sort can boundary-skip an item, so nothing counts as
+  covered until a re-walk from `fetch_verified` writes nothing new. All cursor writes
+  are monotonic, fetch/load runs are serialized per source with advisory locks, and
+  the load advance is grace-capped below in-flight fetch transactions. Details and
+  the module contract: `us-congress/ingester/CONNECTORS.md`.
 - **Gating rule**: an **opaque/external** input (scrape files, an API) → **cursor
   handshake** in `source_state`. An **owned DB table** (has `updated_at`) →
   **staleness comparison**: rebuild when `GREATEST(inputs.updated_at) > built_through`,
@@ -109,6 +117,6 @@ Durable decisions that apply across all tasks:
 - [x] 0007 · Rollback & on-demand redeploy (after 0004) → tasks/done/0007-rollback-redeploy.md
 - [x] 0008 · Deployment docs & runbook (after 0004, 0005, 0006, 0007) → tasks/done/0008-deployment-docs.md
 - [x] 0009 · Target node24-runtime action versions in the workflow (after 0003, 0004, 0005, 0006, 0007) → tasks/done/0009-workflow-node24-actions.md
-- [ ] 0010 · Connector contract + raw_payloads + bills core fetch/load → tasks/0010-bills-connector-core.md
+- [~] 0010 · Connector contract + raw_payloads + bills core fetch/load → tasks/0010-bills-connector-core.md
 - [ ] 0011 · Bill sub-entities: cosponsors, subjects, summaries (after 0010) → tasks/0011-bill-sub-entities.md
 - [ ] 0012 · Refactor votes + legislators onto the connector contract (after 0010) → tasks/0012-connector-contract-refactor.md

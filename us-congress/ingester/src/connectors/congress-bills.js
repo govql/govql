@@ -128,10 +128,17 @@ export async function fetchPagesIntoRaw({
   let pages = 0;
   let upserted = 0;
   let unchanged = 0;
+  // A walk is complete when it ended because the API advertised no further
+  // page — NOT when an anomalous empty-page-with-next truncated it. The
+  // verification logic must never treat a truncated pass as proof of coverage.
+  let complete = true;
 
   for await (const page of listPages({ congress, apiKey, fromDateTime, limit, baseUrl, fetchImpl })) {
     const bills = page.bills ?? [];
-    if (bills.length === 0) break;
+    if (bills.length === 0) {
+      complete = !page.pagination?.next;
+      break;
+    }
 
     await client.query('BEGIN');
     try {
@@ -166,7 +173,7 @@ export async function fetchPagesIntoRaw({
     onPage({ pages, upserted, unchanged, cursor });
   }
 
-  return { pages, upserted, unchanged, cursor };
+  return { pages, upserted, unchanged, cursor, complete };
 }
 
 /**
@@ -245,9 +252,10 @@ export async function fetchPagesUntilClean({
   const first = await runPass(resume);
 
   // Verification is owed when this run's catch-up could have boundary-skipped
-  // (multi-page), or when a previous run left the resume cursor ahead of the
-  // verified cursor (its verification crashed or hit the cap).
-  let owesVerification = first.pages > 1 || resume !== verified;
+  // (multi-page), when a previous run left the resume cursor ahead of the
+  // verified cursor (its verification crashed or hit the cap), or when the
+  // catch-up itself was truncated by an anomalous empty page.
+  let owesVerification = first.pages > 1 || resume !== verified || !first.complete;
   while (owesVerification) {
     if (passes >= maxPasses) {
       log(
@@ -257,7 +265,9 @@ export async function fetchPagesUntilClean({
       return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: false };
     }
     const pass = await runPass(verified);
-    owesVerification = pass.upserted > 0;
+    // Clean = the pass wrote nothing new AND actually walked to the end.
+    // A truncated pass proves nothing about the territory it never reached.
+    owesVerification = pass.upserted > 0 || !pass.complete;
   }
 
   if (cursor !== null) await advanceVerifiedFetchCursor(client, stateName, cursor);
@@ -407,11 +417,13 @@ export function transform(item) {
   if (!BILL_TYPES.has(type)) {
     throw new Error(`unknown bill type ${JSON.stringify(item.type)} (congress ${item.congress}, number ${item.number})`);
   }
-  const number = Number.parseInt(item.number, 10);
-  const congress = Number.parseInt(item.congress, 10);
-  if (!Number.isInteger(number) || !Number.isInteger(congress)) {
+  // Strictly numeric: parseInt('12A') === 12 would map a malformed item onto
+  // the REAL hr12-119 row and clobber it via ON CONFLICT DO UPDATE.
+  if (!/^\d+$/.test(String(item.number ?? '')) || !/^\d+$/.test(String(item.congress ?? ''))) {
     throw new Error(`unparseable bill number/congress: ${JSON.stringify({ number: item.number, congress: item.congress })}`);
   }
+  const number = Number.parseInt(item.number, 10);
+  const congress = Number.parseInt(item.congress, 10);
   return {
     bill_id: `${type}${number}-${congress}`,
     bill_type: type,

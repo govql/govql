@@ -11,3 +11,6 @@
 ALTER TABLE source_state DROP CONSTRAINT source_state_stage_check;
 ALTER TABLE source_state
   ADD CONSTRAINT source_state_stage_check CHECK (stage IN ('fetch', 'fetch_verified', 'load'));
+
+-- Restate the table comment (V003's is immutable) to enumerate all three stages.
+COMMENT ON TABLE source_state IS E'@omit\nStaged-cursor watermarks (fetch/fetch_verified/load) for the ingestion pipeline — internal, not exposed via GraphQL.';

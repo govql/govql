@@ -33,6 +33,11 @@ ALTER TABLE bills ADD COLUMN policy_area TEXT;
 ALTER TABLE bills ADD COLUMN latest_action TEXT;
 ALTER TABLE bills ADD COLUMN latest_action_at DATE;
 
+-- Restate the table comment (V001's is immutable): bills is no longer only
+-- vote-stub rows — Congress.gov list ingestion populates real bill data for
+-- the configured congress(es).
+COMMENT ON TABLE bills IS E'Bills and resolutions. For congresses covered by Congress.gov ingestion (currently the configured target congress, 119), rows carry real bill data — display title, latest action, source timestamps — refreshed hourly; other congresses have stub rows created from vote cross-references (bill id, type, number only). bill_id format: [bill_type][number]-[congress], e.g. hr3590-111.';
+
 COMMENT ON COLUMN bills.title IS 'Display title from Congress.gov (the latest title for the bill).';
 COMMENT ON COLUMN bills.policy_area IS 'Primary policy area assigned by CRS (populated by per-bill detail ingestion, task 0011).';
 COMMENT ON COLUMN bills.latest_action IS 'Text of the most recent action on the bill, from Congress.gov.';

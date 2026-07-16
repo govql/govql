@@ -21,8 +21,22 @@ import { SOURCE_NAME, capWatermark, rawReadiness, loadStaleRawsIntoBills } from 
 async function run() {
   const client = await pool.connect();
   let runId;
+  let locked = false;
 
   try {
+    // Serialize load runs (a manual run beside the :20 cron): the load cursor
+    // write is monotonic as a backstop, but overlapping runs would still
+    // double-transform the same raws and double-count run stats.
+    const { rows: lockRows } = await client.query(
+      `SELECT pg_try_advisory_lock(hashtext($1)) AS locked`,
+      [`${SOURCE_NAME}-load`],
+    );
+    locked = lockRows[0].locked;
+    if (!locked) {
+      logger.warn('Bills load skipped — another bills load run holds the advisory lock (still in progress)');
+      return;
+    }
+
     const loadCursor = await readCursor(client, SOURCE_NAME, 'load');
     const { maxFetchedAt, ready } = await rawReadiness(client, loadCursor);
     if (!ready) {
@@ -76,6 +90,9 @@ async function run() {
     if (runId) await failRun(client, runId, err.message).catch(() => {});
     process.exit(1);
   } finally {
+    if (locked) {
+      await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`${SOURCE_NAME}-load`]).catch(() => {});
+    }
     client.release();
     await pool.end();
   }

@@ -26,6 +26,13 @@ test('transform rejects an item whose type cannot satisfy the bills.bill_type co
   );
 });
 
+test('transform rejects a non-numeric bill number instead of silently clobbering another bill', () => {
+  // parseInt('12A') === 12 would map a malformed item onto the REAL hr12-119
+  // row via ON CONFLICT DO UPDATE; the natural key must be strictly numeric.
+  assert.throws(() => transform({ ...fixture.bills[0], number: '12A' }), /unparseable bill number/);
+  assert.throws(() => transform({ ...fixture.bills[0], congress: '119th' }), /unparseable bill number/);
+});
+
 test('transform maps a bill-list item to a bills row with the hr3590-111 natural key', () => {
   const row = transform(fixture.bills[0]);
   assert.deepEqual(row, {
@@ -250,6 +257,37 @@ test('fetchPagesUntilClean: a resume cursor ahead of the verified cursor forces 
   const vw = verifiedWrites(client);
   assert.equal(vw.length, 1);
   assert.deepEqual(vw[0].params, ['congress-bills-119', resume]);
+});
+
+test('fetchPagesUntilClean: a verification pass truncated by an empty-page-with-next is NOT clean', async () => {
+  // Anomalous API response: zero bills but pagination.next present. Such a
+  // pass wrote nothing, but it also never re-walked the territory — treating
+  // it as clean would advance fetch_verified over a possibly-skipped bill.
+  const anchor = '2025-04-01T00:00:00.000000Z';
+  const pageOne = { bills: [fixture.bills[0]], pagination: { count: 2, next: 'x' } };
+  const pageTwo = { bills: [fixture.bills[1]], pagination: { count: 2 } };
+  const truncated = { bills: [], pagination: { count: 2, next: 'x' } };
+  // Pass 1: multi-page catch-up. Pass 2: truncated (not clean). Pass 3: full
+  // re-walk, everything unchanged → clean.
+  const { fetchImpl } = stubFetch([pageOne, pageTwo, truncated, pageOne, pageTwo]);
+  const client = cursorAwareClient({
+    resume: anchor,
+    verified: anchor,
+    rawRowCount: (n) => (n <= 2 ? 1 : 0),
+  });
+
+  const result = await fetchPagesUntilClean({
+    client,
+    congress: 119,
+    apiKey: 'k',
+    limit: 1,
+    fetchImpl,
+    maxPasses: 5,
+  });
+
+  assert.equal(result.passes, 3);
+  assert.equal(result.verified, true);
+  assert.equal(verifiedWrites(client).length, 1);
 });
 
 test('fetchPagesUntilClean: hitting the pass cap leaves the verified cursor untouched for the next run', async () => {
