@@ -138,6 +138,28 @@ The per-table API docs are generated from the migration files by
 readable SQL (the generator parses `CREATE TABLE` / `COMMENT ON` statements);
 re-run `npm run generate-schema-docs` after schema changes.
 
+## Ingestion pipeline manifest & docs
+
+The `us-congress` ingestion DAG is a maintained artifact.
+`us-congress/ingester/pipeline.manifest.js` is the single source of truth — one
+node per cron-triggered stage, `upstream[]` as the edge set — and
+`us-congress/PIPELINE.md` is generated from it.
+
+**Adding a data source or aggregation?** Add its node(s) to
+`ingester/pipeline.manifest.js` using the standard fields (`id`, `stage`,
+`domain`, `upstream[]`, `reads[]`/`writes[]` with `table:`/`file:`/`external:`
+prefixes, `trigger{cron, readiness}`, `watermark{table, key, advances}`,
+`idempotency`), run `npm run generate-pipeline-docs` in `us-congress/ingester`,
+and commit the regenerated `PIPELINE.md`. `npm run check-pipeline-docs` (also
+exercised by `npm test`) fails on drift: a crontab job with no manifest node or
+vice-versa, a referenced table missing from `db/migrations/`, or a stale
+`PIPELINE.md`.
+
+New nodes follow the master plan's ingestion decisions
+([`plans/PLAN.md`](plans/PLAN.md) "Staged cursors" and "Gating rule"): an
+opaque/external input gets a `source_state` fetch→load cursor handshake; an
+owned DB table gets a staleness comparison against its watermark.
+
 ## Timestamps: JavaScript milliseconds vs Postgres microseconds
 
 **This has bitten us more than once — read it before writing any code that reads a

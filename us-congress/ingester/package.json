@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "generate-pipeline-docs": "node scripts/generate-pipeline-docs.mjs",
+    "check-pipeline-docs": "node scripts/generate-pipeline-docs.mjs --check"
   },
   "dependencies": {
     "pg": "^8.20.0",
