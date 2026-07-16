@@ -207,10 +207,13 @@ export function renderPipelineMd(nodes) {
  * you change how migrations are written, check both.
  */
 export function collectTableNames(sql) {
-  const stripped = sql
-    .replace(/--[^\n]*/g, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/'(?:[^']|'')*'/g, "''");
+  // One left-to-right pass: whichever starts first — a string literal or a
+  // comment — is consumed as that token, so comment-look-alike text inside a
+  // string ('unitedstates/*') can't open a comment that swallows real SQL.
+  const stripped = sql.replace(
+    /('(?:[^']|'')*')|--[^\n]*|\/\*[\s\S]*?\*\//g,
+    (match, stringLiteral) => (stringLiteral ? "''" : ' '),
+  );
   const tables = new Set();
   const re = /\b(CREATE|DROP)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?:"?\w+"?\.)?"?(\w+)"?/gi;
   for (const m of stripped.matchAll(re)) {

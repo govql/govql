@@ -179,6 +179,20 @@ test('collectTableNames ignores CREATE TABLE inside comments and string literals
   assert.deepEqual([...collectTableNames(sql)], ['keep_me']);
 });
 
+test('collectTableNames is not derailed by comment-look-alike text inside string literals', () => {
+  // An in-string /* (V001 has "unitedstates/*") must not open a comment that
+  // swallows real SQL up to the next real */ — and an in-string -- must not
+  // comment out the rest of the line.
+  const sql = [
+    "COMMENT ON TABLE t IS 'uses /* glob';",
+    'CREATE TABLE swallowed (\n  x INT\n);',
+    '/* a real block comment */',
+    "INSERT INTO t VALUES ('a--b'); CREATE TABLE gone (x INT);",
+    'CREATE TABLE after (\n  y INT\n);',
+  ].join('\n');
+  assert.deepEqual([...collectTableNames(sql)].sort(), ['after', 'gone', 'swallowed']);
+});
+
 test('runCheck reports a missing table once per node, even when referenced by reads, writes, and watermark', () => {
   const nodes = makeNodes();
   nodes[1].reads.push('table:gadgets');
