@@ -117,6 +117,6 @@ Durable decisions that apply across all tasks:
 - [x] 0007 · Rollback & on-demand redeploy (after 0004) → tasks/done/0007-rollback-redeploy.md
 - [x] 0008 · Deployment docs & runbook (after 0004, 0005, 0006, 0007) → tasks/done/0008-deployment-docs.md
 - [x] 0009 · Target node24-runtime action versions in the workflow (after 0003, 0004, 0005, 0006, 0007) → tasks/done/0009-workflow-node24-actions.md
-- [~] 0010 · Connector contract + raw_payloads + bills core fetch/load → tasks/0010-bills-connector-core.md
+- [>] 0010 · Connector contract + raw_payloads + bills core fetch/load → tasks/0010-bills-connector-core.md
 - [ ] 0011 · Bill sub-entities: cosponsors, subjects, summaries (after 0010) → tasks/0011-bill-sub-entities.md
 - [ ] 0012 · Refactor votes + legislators onto the connector contract (after 0010) → tasks/0012-connector-contract-refactor.md
