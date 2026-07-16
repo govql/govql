@@ -66,8 +66,10 @@ Durable decisions that apply across all tasks:
   `us-congress/PIPELINE.md` (Mermaid + node table); a `--check` mode validates the
   manifest against the crontabs and migrations and that `PIPELINE.md` is fresh.
   Adding a source or aggregation requires updating the manifest + regenerating
-  (the ritual is recorded in `AGENTS.md`). Runnable via `npm run` only for now;
-  CI/CD enforcement is a separate future issue.
+  (the ritual is recorded in `AGENTS.md`). Runnable via `npm run`; the ingester
+  test suite also runs `--check` against the real repo, and CI runs that suite
+  and gates deploys on it — so drift (including a stale `PIPELINE.md`) already
+  fails CI, and no dedicated CI step is needed.
 - **Deployment (continuous *delivery*)**: the `us-congress` stack ships via
   merge-to-`main` → CI builds four immutable **SHA-tagged, public GHCR images**
   (`scraper`, `ingester`, `server`, docs-baked-into-`nginx` multi-stage) → **one-click

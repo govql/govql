@@ -1,12 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'generate-pipeline-docs.mjs');
+
+// Real-repo tests must not be redirected by a PIPELINE_DOCS_ROOT leaked from
+// the developer's shell: clear it here (in-process code resolves the root
+// lazily, so this takes effect) and pass CLEAN_ENV to real-repo spawns.
+delete process.env.PIPELINE_DOCS_ROOT;
+const CLEAN_ENV = { ...process.env };
 
 import {
   parseCrontab,
@@ -138,6 +144,49 @@ test('runCheck reports a node missing trigger.cron instead of crashing', () => {
   delete nodes[1].trigger.cron;
   const errors = runCheck(makeInputs(nodes));
   assert.ok(errors.some((e) => /ingest-widgets.*missing trigger\.cron/.test(e)));
+});
+
+test('runCheck reports every missing required field instead of crashing', () => {
+  const nodes = makeNodes();
+  delete nodes[1].watermark;
+  delete nodes[1].reads;
+  delete nodes[1].writes;
+  delete nodes[1].upstream;
+  const errors = runCheck(makeInputs(nodes));
+  for (const field of ['watermark', 'reads', 'writes', 'upstream']) {
+    assert.ok(
+      errors.some((e) => new RegExp(`ingest-widgets.*missing ${field}`).test(e)),
+      `expected an error naming missing ${field}, got: ${errors.join(' | ')}`,
+    );
+  }
+});
+
+test('collectTableNames tolerates flexible whitespace between tokens', () => {
+  const sql = 'CREATE  TABLE foo (\n  x INT\n);\nCREATE TABLE\n  bar (\n  y INT\n);';
+  assert.deepEqual([...collectTableNames(sql)].sort(), ['bar', 'foo']);
+});
+
+test('collectTableNames ignores CREATE TABLE inside comments and string literals, and honors DROP TABLE', () => {
+  const sql = [
+    '-- CREATE TABLE commented_out (x int);',
+    '/* CREATE TABLE in_block_comment (x int); */',
+    "COMMENT ON TABLE other IS 'made via CREATE TABLE in_string';",
+    'CREATE TABLE keep_me (\n  x INT\n);',
+    'CREATE TABLE dropped_later (\n  x INT\n);',
+    'DROP TABLE dropped_later;',
+    'DROP TABLE IF EXISTS never_existed;',
+  ].join('\n');
+  assert.deepEqual([...collectTableNames(sql)], ['keep_me']);
+});
+
+test('runCheck reports a missing table once per node, even when referenced by reads, writes, and watermark', () => {
+  const nodes = makeNodes();
+  nodes[1].reads.push('table:gadgets');
+  nodes[1].writes.push('table:gadgets');
+  nodes[1].watermark = { ...nodes[1].watermark, table: 'gadgets' };
+  const errors = runCheck(makeInputs(nodes));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /table 'gadgets'/);
 });
 
 test('collectTableNames finds every CREATE TABLE across concatenated migration SQL', () => {
@@ -276,7 +325,7 @@ test('the real repo is drift-free: manifest ↔ crontabs ↔ migrations ↔ comm
 });
 
 test('CLI: --check exits 0 on the consistent real repo', () => {
-  const result = spawnSync(process.execPath, [SCRIPT, '--check'], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [SCRIPT, '--check'], { encoding: 'utf8', env: CLEAN_ENV });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /consistent/);
 });
@@ -286,16 +335,20 @@ test('CLI: --check exits non-zero on a drifted repo, printing the errors', () =>
   // manifest node fails its cron match, every table is missing, and there is
   // no PIPELINE.md.
   const root = mkdtempSync(join(tmpdir(), 'pipeline-docs-drift-'));
-  mkdirSync(join(root, 'ingester'), { recursive: true });
-  mkdirSync(join(root, 'scraper'), { recursive: true });
-  mkdirSync(join(root, 'db/migrations'), { recursive: true });
-  writeFileSync(join(root, 'ingester/ingest_cron'), '# empty\n');
-  writeFileSync(join(root, 'scraper/scrape_cron'), '# empty\n');
-  const result = spawnSync(process.execPath, [SCRIPT, '--check'], {
-    encoding: 'utf8',
-    env: { ...process.env, PIPELINE_DOCS_ROOT: root },
-  });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /found 0/);
-  assert.match(result.stderr, /PIPELINE\.md is stale/);
+  try {
+    mkdirSync(join(root, 'ingester'), { recursive: true });
+    mkdirSync(join(root, 'scraper'), { recursive: true });
+    mkdirSync(join(root, 'db/migrations'), { recursive: true });
+    writeFileSync(join(root, 'ingester/ingest_cron'), '# empty\n');
+    writeFileSync(join(root, 'scraper/scrape_cron'), '# empty\n');
+    const result = spawnSync(process.execPath, [SCRIPT, '--check'], {
+      encoding: 'utf8',
+      env: { ...CLEAN_ENV, PIPELINE_DOCS_ROOT: root },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /found 0/);
+    assert.match(result.stderr, /PIPELINE\.md is stale/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

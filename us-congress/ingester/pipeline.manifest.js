@@ -53,7 +53,7 @@ export const nodes = [
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '50 * * * *', match: 'src/ingest-votes.js' },
       readiness:
-        "runs iff source_state fetch.cursor > load.cursor, or load.cursor is unset, for 'congress-votes' (loadReadiness)",
+        "runs iff source_state fetch.cursor is set and (fetch.cursor > load.cursor or load.cursor is unset), for 'congress-votes' (loadReadiness)",
     },
     watermark: {
       table: 'source_state',
@@ -119,7 +119,7 @@ export const nodes = [
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '15 2 * * *', match: 'src/ingest-legislators.js' },
       readiness:
-        "runs iff source_state fetch.cursor > load.cursor, or load.cursor is unset, for 'congress-legislators' (loadReadiness)",
+        "runs iff source_state fetch.cursor is set and (fetch.cursor > load.cursor or load.cursor is unset), for 'congress-legislators' (loadReadiness)",
     },
     watermark: {
       table: 'source_state',

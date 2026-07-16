@@ -14,9 +14,10 @@ import { nodes } from '../pipeline.manifest.js';
 
 // scripts/ lives in us-congress/ingester/; everything is relative to us-congress/.
 // PIPELINE_DOCS_ROOT overrides the root so tests can point --check at a fixture.
-const US_CONGRESS_DIR = process.env.PIPELINE_DOCS_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), '../..');
-const MIGRATIONS_DIR = join(US_CONGRESS_DIR, 'db/migrations');
-const PIPELINE_MD = join(US_CONGRESS_DIR, 'PIPELINE.md');
+// Resolved lazily (not at import) so tests can clear a leaked variable first.
+function usCongressDir() {
+  return process.env.PIPELINE_DOCS_ROOT ?? join(dirname(fileURLToPath(import.meta.url)), '../..');
+}
 
 /**
  * Parse a crontab into [{ schedule, command }]. Handles both formats in this
@@ -69,14 +70,20 @@ export function crontabFilesFor(nodes) {
 export function runCheck({ nodes, crontabs, migrationsSql, committedDoc }) {
   const errors = [];
 
-  // Structural: unique ids, upstream edges point at real nodes.
+  // Structural: unique ids, required fields present, upstream edges point at
+  // real nodes.
   const ids = new Set();
   for (const node of nodes) {
     if (ids.has(node.id)) errors.push(`duplicate node id '${node.id}'`);
     ids.add(node.id);
   }
   for (const node of nodes) {
-    for (const up of node.upstream) {
+    for (const field of ['upstream', 'reads', 'writes', 'watermark']) {
+      if (!node[field]) errors.push(`node '${node.id}': missing ${field}`);
+    }
+  }
+  for (const node of nodes) {
+    for (const up of node.upstream ?? []) {
       if (!ids.has(up)) errors.push(`node '${node.id}': upstream '${up}' is unknown`);
     }
   }
@@ -121,14 +128,15 @@ export function runCheck({ nodes, crontabs, migrationsSql, committedDoc }) {
     });
   }
 
-  // Every referenced table must exist in the migrations.
+  // Every referenced table must exist in the migrations. Deduped per node so
+  // one missing table reads/writes/watermarks as a single error.
   const tables = collectTableNames(migrationsSql);
   for (const node of nodes) {
-    const referenced = [...node.reads, ...node.writes]
+    const referenced = [...(node.reads ?? []), ...(node.writes ?? [])]
       .filter((entry) => entry.startsWith('table:'))
       .map((entry) => entry.slice('table:'.length));
-    referenced.push(node.watermark.table);
-    for (const table of referenced) {
+    if (node.watermark?.table) referenced.push(node.watermark.table);
+    for (const table of new Set(referenced)) {
       if (!tables.has(table)) {
         errors.push(`node '${node.id}' references table '${table}' not created in db/migrations/`);
       }
@@ -161,7 +169,7 @@ export function renderPipelineMd(nodes) {
     lines.push(`  ${node.id}["${node.id}<br/>(${node.stage})"]`);
   }
   for (const node of nodes) {
-    for (const up of node.upstream) {
+    for (const up of node.upstream ?? []) {
       lines.push(`  ${up} --> ${node.id}`);
     }
   }
@@ -178,8 +186,8 @@ export function renderPipelineMd(nodes) {
       `| \`${node.id}\` | ${node.stage} | ${node.domain} ` +
         `| ${node.trigger?.cron ? `\`${node.trigger.cron.schedule}\` (${cell(node.trigger.cron.file)})` : '—'} ` +
         `| ${cell(node.trigger?.readiness ?? '— (producer)')} ` +
-        `| ${list(node.reads)} | ${list(node.writes)} ` +
-        `| \`${cell(node.watermark.table)}\` (${cell(node.watermark.key)}) — advances ${cell(node.watermark.advances)} ` +
+        `| ${list(node.reads ?? [])} | ${list(node.writes ?? [])} ` +
+        `| ${node.watermark ? `\`${cell(node.watermark.table)}\` (${cell(node.watermark.key)}) — advances ${cell(node.watermark.advances)}` : '—'} ` +
         `| ${cell(node.idempotency)} |`,
     );
   }
@@ -188,33 +196,48 @@ export function renderPipelineMd(nodes) {
 }
 
 /**
- * Collect table names from CREATE TABLE statements in migration SQL. Same
- * source-of-truth approach as docs/scripts/generate-schema-docs.mjs, which
- * parses the concatenated db/migrations/*.sql for its per-table docs.
+ * Collect the table names that exist after running the migration SQL in
+ * order: CREATE TABLE adds, DROP TABLE removes. Comments and string literals
+ * are stripped first so mentions inside them don't register phantom tables.
+ *
+ * Note: this deliberately does NOT reuse parseSchema() in
+ * docs/scripts/generate-schema-docs.mjs — that parser is unexported and its
+ * module runs main() on import. The two parsers can disagree (this one also
+ * accepts lowercase, IF NOT EXISTS, schema-qualified, and quoted names); if
+ * you change how migrations are written, check both.
  */
 export function collectTableNames(sql) {
+  const stripped = sql
+    .replace(/--[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/'(?:[^']|'')*'/g, "''");
   const tables = new Set();
-  for (const m of sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(?:"?\w+"?\.)?"?(\w+)"?/gi)) {
-    tables.add(m[1]);
+  const re = /\b(CREATE|DROP)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?:"?\w+"?\.)?"?(\w+)"?/gi;
+  for (const m of stripped.matchAll(re)) {
+    if (m[1].toUpperCase() === 'CREATE') tables.add(m[2]);
+    else tables.delete(m[2]);
   }
   return tables;
 }
 
 /** Assemble runCheck's inputs from the real repo files. */
 export function loadInputs() {
+  const root = usCongressDir();
+  const migrationsDir = join(root, 'db/migrations');
+  const pipelineMd = join(root, 'PIPELINE.md');
   const crontabs = {};
   for (const file of crontabFilesFor(nodes)) {
-    const path = join(US_CONGRESS_DIR, file);
+    const path = join(root, file);
     // A manifest-referenced file that doesn't exist reads as empty, so the
     // node's cron match fails with a drift error instead of a crash.
     crontabs[file] = existsSync(path) ? readFileSync(path, 'utf8') : '';
   }
-  const migrationsSql = readdirSync(MIGRATIONS_DIR)
+  const migrationsSql = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))
     .sort()
-    .map((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8'))
+    .map((f) => readFileSync(join(migrationsDir, f), 'utf8'))
     .join('\n');
-  const committedDoc = existsSync(PIPELINE_MD) ? readFileSync(PIPELINE_MD, 'utf8') : null;
+  const committedDoc = existsSync(pipelineMd) ? readFileSync(pipelineMd, 'utf8') : null;
   return { nodes, crontabs, migrationsSql, committedDoc };
 }
 
@@ -230,8 +253,9 @@ function main() {
     console.log('✔ pipeline manifest, crontabs, migrations, and PIPELINE.md are consistent');
     return;
   }
-  writeFileSync(PIPELINE_MD, renderPipelineMd(inputs.nodes));
-  console.log(`Wrote ${PIPELINE_MD}`);
+  const pipelineMd = join(usCongressDir(), 'PIPELINE.md');
+  writeFileSync(pipelineMd, renderPipelineMd(inputs.nodes));
+  console.log(`Wrote ${pipelineMd}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
