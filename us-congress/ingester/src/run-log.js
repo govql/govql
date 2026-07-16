@@ -19,13 +19,20 @@ export async function openRun(client, runType, sourceParams = null) {
   return rows[0].id;
 }
 
-/** Close a run as successful with the number of records upserted. */
-export async function succeedRun(client, runId, recordsUpserted) {
+/**
+ * Close a run as successful with the number of records upserted. Optional
+ * `outcome` details (e.g. a fetch run's `{verified, passes}`) merge into
+ * source_params so monitoring can query them — a run that completed but gave
+ * up on some guarantee must be distinguishable from a healthy one in
+ * ingestion_runs, not only in container logs.
+ */
+export async function succeedRun(client, runId, recordsUpserted, outcome = null) {
   await client.query(
     `UPDATE ingestion_runs
-     SET finished_at = now(), status = 'success', records_upserted = $1
-     WHERE id = $2`,
-    [recordsUpserted, runId],
+     SET finished_at = now(), status = 'success', records_upserted = $1,
+         source_params = coalesce(source_params, '{}'::jsonb) || $2
+     WHERE id = $3`,
+    [recordsUpserted, outcome === null ? '{}' : JSON.stringify(outcome), runId],
   );
 }
 

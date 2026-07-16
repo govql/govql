@@ -42,7 +42,20 @@ test('succeedRun closes the run with status success and the upsert count', async
   assert.match(text, /UPDATE ingestion_runs/i);
   assert.match(text, /'success'/);
   assert.match(text, /finished_at = now\(\)/i);
-  assert.deepEqual(params, [250, 42]);
+  // '{}' (a merge no-op), never NULL — jsonb || NULL is NULL and would wipe
+  // the source_params recorded at openRun.
+  assert.deepEqual(params, [250, '{}', 42]);
+});
+
+test('succeedRun merges outcome details into source_params so monitoring can query them', async () => {
+  // A fetch run that gave up unverified must be distinguishable from a healthy
+  // one in ingestion_runs, not only in container logs.
+  const client = stubClient();
+  await succeedRun(client, 42, 250, { verified: false, passes: 5 });
+
+  const { text, params } = client.calls[0];
+  assert.match(text, /source_params = coalesce\(source_params, '\{\}'::jsonb\) \|\| \$2/i);
+  assert.deepEqual(params, [250, JSON.stringify({ verified: false, passes: 5 }), 42]);
 });
 
 test('failRun closes the run with status failed and the error message', async () => {

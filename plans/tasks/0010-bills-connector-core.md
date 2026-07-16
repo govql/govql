@@ -183,3 +183,15 @@ Review-fix round 3 (2026-07-16, user-approved: everything round 3 found):
   (three stages), `fetch-bills.js` header describes the two-cursor design, PLAN.md
   "Staged cursors" decision records the API-source watermark pair, and the cheap
   no-op acceptance note carries the grace-window exception (above).
+
+Review-fix round 4 (2026-07-16, user-approved: the wedged-fetch observability bug):
+
+- A fetch run that gives up unverified is no longer indistinguishable from a healthy
+  one: `succeedRun` gained an outcome merge into `ingestion_runs.source_params`
+  (fetch runs record `{verified, passes}`, queryable for wedge streaks), the final
+  log line is warn-level when unverified, and the dead-man's-switch healthcheck ping
+  is withheld on non-converged runs so persistent wedging trips the monitor. The
+  jsonb merge uses `'{}'` for the no-outcome case — `jsonb || NULL` is NULL and
+  would have wiped the params recorded at `openRun` (caught by test + real-Postgres
+  smoke). Remaining round-4 findings (CONNECTORS.md/PLAN.md wording lag,
+  `advanceLoadCursor` jsdoc, stage bind-param nit) are open, not yet approved.

@@ -78,15 +78,21 @@ async function run() {
 
     // The fetch cursor already advanced per committed page; closing the run is
     // bookkeeping only, so it needs no shared transaction with the cursor.
-    // `upserted` is the distinct-key count across passes.
-    await succeedRun(client, runId, upserted);
-    logger.info(
+    // `upserted` is the distinct-key count across passes. The verification
+    // outcome is recorded on the run row so a wedged fetch (every run giving
+    // up unverified) is queryable in ingestion_runs, not just a log line.
+    await succeedRun(client, runId, upserted, { verified, passes });
+    const summary =
       `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes} ` +
       `(${verified ? 'verified' : 'NOT verified — next run re-walks'}), pages: ${pages}, ` +
-      `upserted: ${upserted}, unchanged: ${unchanged}, cursor: ${cursor ?? 'none'}`,
-    );
+      `upserted: ${upserted}, unchanged: ${unchanged}, cursor: ${cursor ?? 'none'}`;
+    if (verified) logger.info(summary);
+    else logger.warn(summary);
 
-    if (process.env.HEALTHCHECK_BILLS_FETCH_URL) {
+    // Dead-man's switch: only a VERIFIED run pings. A persistently wedged
+    // fetch (non-converging verification every hour) then stops the pings and
+    // trips the monitor instead of hiding behind a green healthcheck.
+    if (verified && process.env.HEALTHCHECK_BILLS_FETCH_URL) {
       await fetch(process.env.HEALTHCHECK_BILLS_FETCH_URL).catch(() => {});
     }
   } catch (err) {
