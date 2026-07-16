@@ -11,9 +11,11 @@ This file lives in a generic `plans/` directory and is pointed to from `AGENTS.m
 usable across Claude, Codex, and OpenCode.
 
 **PR convention for these tasks**: issue #56 is a *tracking* issue spanning steps
-1–5; this plan only implements steps 1+2. Each task's PR must **reference** #56
-(e.g. `Part of #56`) and must **not** close it (no `Closes #56`). Steps 3–5 get a
-fresh follow-up issue.
+1–5; tasks 0001–0002 implemented steps 1+2 (PRs say `Part of #56`). Steps 3+4 are
+tracked by sub-issue **#89** (bills connector via the Congress.gov API): tasks
+0010–0012 reference it with `Part of #89`. Neither issue is ever closed by a task
+PR (no `Closes …` — both are tracking issues). Step 5 (Postgres-backed queue)
+stays parked in #56 with its documented trigger.
 
 ## Workflow
 
@@ -70,6 +72,18 @@ Durable decisions that apply across all tasks:
   test suite also runs `--check` against the real repo, and CI runs that suite
   and gates deploys on it — so drift (including a stale `PIPELINE.md`) already
   fails CI, and no dedicated CI step is needed.
+- **Source connectors** (from issue #89): each source is a module implementing one
+  documented contract — `discover → fetch(→raw) → transform → load`, with per-stage
+  `source_state` watermarks — plus shared helpers (cursor readiness, chunked per-page
+  commits, run logging); a lightweight module shape, not a class hierarchy. **Raw
+  landing convention**: scraped sources land files on the shared volume; API sources
+  land JSON in the `raw_payloads` table, where incremental load is
+  `fetched_at > load cursor` and the cursor advances inside the loading transaction.
+  API fetchers run in the **ingester** container as their own cron entries (stage
+  boundary ≠ container boundary); API keys live in the droplet's dotenvx secrets.
+  Backfill and incremental are the same code path — backfill is an earlier starting
+  watermark. First implementer: Congress.gov bills (current congress; depth is a
+  config knob).
 - **Deployment (continuous *delivery*)**: the `us-congress` stack ships via
   merge-to-`main` → CI builds four immutable **SHA-tagged, public GHCR images**
   (`scraper`, `ingester`, `server`, docs-baked-into-`nginx` multi-stage) → **one-click
@@ -95,3 +109,6 @@ Durable decisions that apply across all tasks:
 - [x] 0007 · Rollback & on-demand redeploy (after 0004) → tasks/done/0007-rollback-redeploy.md
 - [x] 0008 · Deployment docs & runbook (after 0004, 0005, 0006, 0007) → tasks/done/0008-deployment-docs.md
 - [x] 0009 · Target node24-runtime action versions in the workflow (after 0003, 0004, 0005, 0006, 0007) → tasks/done/0009-workflow-node24-actions.md
+- [ ] 0010 · Connector contract + raw_payloads + bills core fetch/load → tasks/0010-bills-connector-core.md
+- [ ] 0011 · Bill sub-entities: cosponsors, subjects, summaries (after 0010) → tasks/0011-bill-sub-entities.md
+- [ ] 0012 · Refactor votes + legislators onto the connector contract (after 0010) → tasks/0012-connector-contract-refactor.md
