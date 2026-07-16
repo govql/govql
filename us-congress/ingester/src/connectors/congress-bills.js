@@ -14,6 +14,18 @@ export const SOURCE_NAME = 'congress-bills';
 // Task 0011's per-bill sub-entity fetches will use their own tags.
 export const LIST_ENDPOINT = 'bill-list';
 
+/**
+ * source_state key for one congress's fetch cursor. Keyed per congress —
+ * unlike the load cursor, which spans the source — because the cursor is the
+ * max updateDate *within* the target congress: reusing one cursor across
+ * congresses would make a later CONGRESS_GOV_TARGET_CONGRESS change filter the
+ * new congress's backfill behind the old congress's watermark, silently
+ * fetching almost nothing.
+ */
+export function fetchStateName(congress) {
+  return `${SOURCE_NAME}-${congress}`;
+}
+
 // Congress.gov bill types, as they appear (uppercased) in the list endpoint,
 // matching the CHECK constraint on bills.bill_type.
 const BILL_TYPES = new Set(['hr', 'hres', 'hjres', 'hconres', 's', 'sres', 'sjres', 'sconres']);
@@ -43,11 +55,12 @@ export async function* listPages({
       sort: 'updateDate asc',
       limit: String(limit),
       offset: String(offset),
-      api_key: apiKey,
     });
     if (fromDateTime !== null) params.set('fromDateTime', fromDateTime);
     const url = `${baseUrl}/bill/${congress}?${params}`;
-    const response = await fetchImpl(url);
+    // The key goes in the X-Api-Key header, never the URL: query strings land
+    // in proxy/access logs and in error objects that carry the failing URL.
+    const response = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey } });
     if (!response.ok) {
       throw new Error(`Congress.gov bill list request failed with HTTP ${response.status} (congress ${congress}, offset ${offset})`);
     }
@@ -135,7 +148,7 @@ export async function fetchPagesIntoRaw({
       }
       const pageMax = maxUpdateDate(bills, cursor);
       if (pageMax !== null && pageMax !== cursor) {
-        await advanceFetchCursor(client, SOURCE_NAME, pageMax);
+        await advanceFetchCursor(client, fetchStateName(congress), pageMax);
         cursor = pageMax;
       }
       await client.query('COMMIT');
@@ -148,6 +161,46 @@ export async function fetchPagesIntoRaw({
   }
 
   return { pages, upserted, unchanged, cursor };
+}
+
+/**
+ * Fetch with skip-proofing. Offset pagination over an updateDate-ascending
+ * sort is not stable while the list mutates: if Congress.gov bumps an
+ * already-consumed bill mid-run, every later item shifts one position earlier
+ * and the item straddling the next page boundary is silently skipped — then
+ * the advanced cursor excludes it from future runs. So after any multi-page
+ * pass that wrote something, re-walk from the SAME starting fromDateTime until
+ * a pass writes nothing new (idempotent, diff-guarded upserts make the overlap
+ * cost API calls only). A single-page pass has no boundary to skip across and
+ * needs no re-walk. Cursor regression during a re-walk is safe — a lower
+ * cursor only ever over-fetches.
+ */
+export async function fetchPagesUntilClean({ maxPasses = 5, log = () => {}, ...opts }) {
+  let passes = 0;
+  let pages = 0;
+  let upserted = 0;
+  let unchanged = 0;
+  let cursor = opts.fromDateTime ?? null;
+
+  for (;;) {
+    const result = await fetchPagesIntoRaw(opts);
+    passes += 1;
+    pages += result.pages;
+    upserted += result.upserted;
+    unchanged += result.unchanged;
+    cursor = result.cursor ?? cursor;
+
+    if (result.pages <= 1 || result.upserted === 0) break;
+    if (passes >= maxPasses) {
+      log(
+        `Bills fetch verification did not converge after ${passes} passes — ` +
+        `proceeding; the next hourly run re-checks from the advanced cursor`,
+      );
+      break;
+    }
+  }
+
+  return { passes, pages, upserted, unchanged, cursor };
 }
 
 /**
@@ -172,56 +225,92 @@ export async function rawReadiness(client, loadCursor) {
  * cursor into a bills upsert. ON CONFLICT (bill_id) DO UPDATE enriches the
  * vote-stub rows the votes ingester writes with DO NOTHING; identity columns
  * (bill_type, bill_number, congress) are part of the key and not updated.
- * A row that fails to transform (unknown type) is logged and counted, never
- * fatal. Returns the max consumed fetched_at so the caller can advance the
- * load cursor to exactly that value.
+ *
+ * The backlog is read in keyset batches — (fetched_at, natural_key) tuple
+ * bounds, never a bare fetched_at bound, because every row of a fetch page
+ * shares one transaction-start now() and a bare bound would skip the rest of
+ * a tie group cut by LIMIT. Bounded batches keep the first post-backfill run
+ * (the whole congress) inside the ingester's small heap.
+ *
+ * Error handling is deliberately asymmetric: a transform reject (unknown
+ * type) is deterministic — logged, counted, and skipped past, since it will
+ * never succeed. A database error on the upsert is NOT caught: it fails the
+ * run so the caller leaves the load cursor unadvanced and the idempotent
+ * rerun re-reads the row — swallowing it would advance the cursor past a row
+ * that was never consumed, and the payload-diff guard means that row's
+ * fetched_at may never move again.
+ *
+ * Returns the max consumed fetched_at so the caller can advance the load
+ * cursor to exactly that value.
  */
-export async function loadStaleRawsIntoBills({ client, loadCursor, log = console.error }) {
-  const { rows } = await client.query(
-    `SELECT natural_key, payload,
-            to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
-     FROM raw_payloads
-     WHERE source_name = $1 AND endpoint = $2
-       AND ($3::timestamptz IS NULL OR fetched_at > $3)
-     ORDER BY fetched_at ASC`,
-    [SOURCE_NAME, LIST_ENDPOINT, loadCursor],
-  );
-
+export async function loadStaleRawsIntoBills({ client, loadCursor, batchSize = 500, log = console.error }) {
   let ingested = 0;
   let failed = 0;
   let maxFetchedAt = loadCursor;
+  let after = null; // {fetchedAt, naturalKey} keyset position within this run
 
-  for (const raw of rows) {
-    try {
-      const row = transform(raw.payload);
-      await client.query(
-        `INSERT INTO bills (
-           bill_id, bill_type, bill_number, congress,
-           title, latest_action, latest_action_at, source_updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (bill_id) DO UPDATE SET
-           title             = EXCLUDED.title,
-           latest_action     = EXCLUDED.latest_action,
-           latest_action_at  = EXCLUDED.latest_action_at,
-           source_updated_at = EXCLUDED.source_updated_at,
-           updated_at        = now()`,
-        [
-          row.bill_id,
-          row.bill_type,
-          row.bill_number,
-          row.congress,
-          row.title,
-          row.latest_action,
-          row.latest_action_at,
-          row.source_updated_at,
-        ],
-      );
-      ingested += 1;
-    } catch (err) {
-      failed += 1;
-      log(`Failed to load raw payload ${raw.natural_key}: ${err.message}`);
+  for (;;) {
+    const { rows } = after === null
+      ? await client.query(
+          `SELECT natural_key, payload,
+                  to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
+           FROM raw_payloads
+           WHERE source_name = $1 AND endpoint = $2
+             AND ($3::timestamptz IS NULL OR fetched_at > $3)
+           ORDER BY fetched_at, natural_key
+           LIMIT $4`,
+          [SOURCE_NAME, LIST_ENDPOINT, loadCursor, batchSize],
+        )
+      : await client.query(
+          `SELECT natural_key, payload,
+                  to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
+           FROM raw_payloads
+           WHERE source_name = $1 AND endpoint = $2
+             AND (fetched_at, natural_key) > ($3, $4)
+           ORDER BY fetched_at, natural_key
+           LIMIT $5`,
+          [SOURCE_NAME, LIST_ENDPOINT, after.fetchedAt, after.naturalKey, batchSize],
+        );
+
+    for (const raw of rows) {
+      let row = null;
+      try {
+        row = transform(raw.payload);
+      } catch (err) {
+        failed += 1;
+        log(`Failed to transform raw payload ${raw.natural_key}: ${err.message}`);
+      }
+      if (row !== null) {
+        await client.query(
+          `INSERT INTO bills (
+             bill_id, bill_type, bill_number, congress,
+             title, latest_action, latest_action_at, source_updated_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (bill_id) DO UPDATE SET
+             title             = EXCLUDED.title,
+             latest_action     = EXCLUDED.latest_action,
+             latest_action_at  = EXCLUDED.latest_action_at,
+             source_updated_at = EXCLUDED.source_updated_at,
+             updated_at        = now()`,
+          [
+            row.bill_id,
+            row.bill_type,
+            row.bill_number,
+            row.congress,
+            row.title,
+            row.latest_action,
+            row.latest_action_at,
+            row.source_updated_at,
+          ],
+        );
+        ingested += 1;
+      }
+      if (maxFetchedAt === null || raw.fetched_at > maxFetchedAt) maxFetchedAt = raw.fetched_at;
     }
-    if (maxFetchedAt === null || raw.fetched_at > maxFetchedAt) maxFetchedAt = raw.fetched_at;
+
+    if (rows.length < batchSize) break;
+    const last = rows[rows.length - 1];
+    after = { fetchedAt: last.fetched_at, naturalKey: last.natural_key };
   }
 
   return { ingested, failed, maxFetchedAt };

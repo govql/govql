@@ -15,8 +15,8 @@ A connector is one module under `src/connectors/<source>.js` exporting:
 | `SOURCE_NAME` | The `source_state` key, e.g. `'congress-bills'`. |
 | discover | Enumerating what to fetch. For bills this is config (the target congress); file sources walk a directory tree. |
 | fetch → raw | Pull from the source and land the **raw, untransformed** payload. Pages/chunks commit incrementally (see watermarks below). |
-| `transform` | Pure raw→row mapping. No I/O, no pool — unit-tested from recorded fixtures. Rejects rows that can't satisfy schema constraints; the load stage counts and logs them, never crashes. |
-| load | Idempotent upserts into the domain tables (`ON CONFLICT … DO UPDATE`). |
+| `transform` | Pure raw→row mapping. No I/O, no pool — unit-tested from recorded fixtures. Rejects rows that can't satisfy schema constraints; the load stage counts and logs those (deterministic, will never succeed) and skips past them. |
+| load | Idempotent upserts into the domain tables (`ON CONFLICT … DO UPDATE`), read from raw in bounded **keyset batches** (tuple bounds, since a whole fetch page shares one `now()`), so a full backfill fits the ingester's small heap. **Database errors are not swallowed**: they fail the run so the unadvanced cursor re-reads the rows — only transform rejects are the designed skip path. |
 
 Connector modules are **pool-free and side-effect-free at import time**: they take a
 `client` (and, for API sources, a `fetchImpl`) as arguments, so everything is testable
@@ -44,8 +44,16 @@ Staged cursors live in `source_state` (see the master plan's "Staged cursors" an
 - **Fetch cursor** — for API sources, the max consumed source watermark (bills: the
   max `updateDate`), advanced **in the same transaction as each committed page** of
   raw payloads, so a crash resumes from the last committed page. Backfill is the same
-  code with a NULL starting cursor. File sources instead have the scraper write
-  `now()` on success.
+  code with a NULL starting cursor. The key is **per discovery unit** (bills:
+  `congress-bills-<congress>`) so retargeting the config knob starts a fresh backfill
+  instead of filtering behind another unit's watermark. File sources instead have the
+  scraper write `now()` on success.
+- **Skip-proofing offset pagination** — an offset walk over a mutating, ascending
+  sort can skip an item across a page boundary (an already-consumed row gets bumped
+  to the tail; everything after it shifts one position earlier). Multi-page runs
+  therefore **re-walk from the run's starting cursor until a pass writes nothing
+  new** (`fetchPagesUntilClean`); idempotent, diff-guarded upserts make the overlap
+  cost API calls only.
 - **Load readiness** — an opaque/external input (files) gets the fetch↔load cursor
   handshake (`loadReadiness` in `cursor-state.js`); an **owned DB table** like
   `raw_payloads` gets a **staleness comparison** against its watermark (bills:

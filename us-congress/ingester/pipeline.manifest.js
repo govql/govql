@@ -96,11 +96,11 @@ export const nodes = [
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '5 * * * *', match: 'src/fetch-bills.js' },
       readiness:
-        'loud clean skip when CONGRESS_GOV_API_KEY is unset; otherwise pages fromDateTime = fetch cursor (NULL cursor = backfill)',
+        'loud clean skip when CONGRESS_GOV_API_KEY is unset; otherwise pages fromDateTime = fetch cursor (NULL cursor = backfill), re-walking multi-page runs until a pass writes nothing new (offset-pagination skip-proofing)',
     },
     watermark: {
       table: 'source_state',
-      key: "source_name='congress-bills', stage='fetch'",
+      key: "source_name='congress-bills-<congress>', stage='fetch' (per target congress)",
       advances:
         'to the max consumed updateDate, in the same transaction as each committed page of raw_payloads (crash resumes from the last committed page)',
     },

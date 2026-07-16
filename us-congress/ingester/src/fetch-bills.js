@@ -5,9 +5,12 @@
  * endpoint for the configured congress into raw_payloads. First API-source
  * implementer of the connector contract (see CONNECTORS.md) — unlike the
  * scraped file sources, this stage writes its own `fetch` cursor in
- * source_state: the max consumed updateDate, advanced inside the same
- * transaction as each committed page, so a kill mid-backfill resumes from the
- * last committed page. Backfill is this same code with a NULL starting cursor.
+ * source_state (keyed per congress): the max consumed updateDate, advanced
+ * inside the same transaction as each committed page, so a kill mid-backfill
+ * resumes from the last committed page. Backfill is this same code with a NULL
+ * starting cursor. Multi-page runs re-walk from the starting cursor until a
+ * pass writes nothing new, so offset-pagination boundary skips can't drop a
+ * bill behind the advanced cursor.
  *
  * Config: CONGRESS_GOV_API_KEY (required — without it the run is a loud,
  * clean skip so the cron never crashes) and CONGRESS_GOV_TARGET_CONGRESS
@@ -18,7 +21,7 @@ import { pool } from './db.js';
 import { logger } from './logger.js';
 import { readCursor } from './cursor-state.js';
 import { openRun, succeedRun, failRun } from './run-log.js';
-import { SOURCE_NAME, fetchPagesIntoRaw, toFromDateTime } from './connectors/congress-bills.js';
+import { fetchPagesUntilClean, fetchStateName, toFromDateTime } from './connectors/congress-bills.js';
 
 const API_KEY = process.env.CONGRESS_GOV_API_KEY;
 const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS ?? '119', 10);
@@ -36,14 +39,18 @@ async function run() {
   let runId;
 
   try {
-    const fromDateTime = toFromDateTime(await readCursor(client, SOURCE_NAME, 'fetch'));
+    // The fetch cursor is keyed per congress, so retargeting
+    // CONGRESS_GOV_TARGET_CONGRESS starts that congress's own backfill instead
+    // of filtering behind another congress's watermark.
+    const fromDateTime = toFromDateTime(await readCursor(client, fetchStateName(TARGET_CONGRESS), 'fetch'));
     runId = await openRun(client, 'bills_fetch', { congress: TARGET_CONGRESS, fromDateTime });
 
-    const { pages, upserted, unchanged, cursor } = await fetchPagesIntoRaw({
+    const { passes, pages, upserted, unchanged, cursor } = await fetchPagesUntilClean({
       client,
       congress: TARGET_CONGRESS,
       apiKey: API_KEY,
       fromDateTime,
+      log: (msg) => logger.warn(msg),
       onPage: (p) =>
         logger.info(
           `Bills fetch page ${p.pages} committed — upserted: ${p.upserted}, ` +
@@ -55,7 +62,7 @@ async function run() {
     // bookkeeping only, so it needs no shared transaction with the cursor.
     await succeedRun(client, runId, upserted);
     logger.info(
-      `Bills fetch complete — congress ${TARGET_CONGRESS}, pages: ${pages}, ` +
+      `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes}, pages: ${pages}, ` +
       `upserted: ${upserted}, unchanged: ${unchanged}, cursor: ${cursor ?? 'none'}`,
     );
 

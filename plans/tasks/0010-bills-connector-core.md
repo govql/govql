@@ -125,3 +125,20 @@ Decisions made along the way:
 - Run logging extracted to `run-log.js`; the chunked per-page commit stays inside the
   bills connector until a second API source justifies generalizing it (noted in
   CONNECTORS.md).
+
+Review-fix round (same day, user-approved: all four majors + the security minor):
+
+- Load stage no longer swallows database errors — only transform rejects are the
+  designed skip path; a DB error fails the run so the unadvanced cursor re-reads the
+  rows (`loadStaleRawsIntoBills`).
+- Load reads the backlog in keyset batches (`(fetched_at, natural_key)` tuple bounds,
+  default 500/batch) instead of buffering every stale JSONB payload — the
+  post-backfill run now fits the ingester's 64 MB heap.
+- Fetch cursor keyed per congress (`congress-bills-<congress>` in `source_state`), so
+  retargeting `CONGRESS_GOV_TARGET_CONGRESS` starts a fresh backfill instead of a
+  silent near-no-op behind the old congress's watermark.
+- Multi-page fetch runs re-walk from the starting cursor until a pass writes nothing
+  new (`fetchPagesUntilClean`, capped at 5 passes) — offset-pagination boundary skips
+  can no longer strand a bill behind the advanced cursor.
+- Congress.gov API key moved from the `api_key` URL parameter to the `X-Api-Key`
+  header.

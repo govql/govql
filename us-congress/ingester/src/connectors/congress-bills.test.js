@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   fetchPagesIntoRaw,
+  fetchPagesUntilClean,
+  fetchStateName,
   listPages,
   loadStaleRawsIntoBills,
   rawReadiness,
@@ -39,19 +41,21 @@ test('transform maps a bill-list item to a bills row with the hr3590-111 natural
 
 function stubFetch(pages) {
   const urls = [];
-  const fetchImpl = (url) => {
+  const options = [];
+  const fetchImpl = (url, opts) => {
     urls.push(url);
+    options.push(opts);
     const body = pages[urls.length - 1];
     if (!body) throw new Error(`unexpected extra fetch: ${url}`);
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
   };
-  return { urls, fetchImpl };
+  return { urls, options, fetchImpl };
 }
 
 test('listPages pages the bill-list endpoint with cursor, sort, and offset until the last page', async () => {
   const pageOne = { bills: [fixture.bills[0]], pagination: { count: 2, next: 'https://api.congress.gov/v3/bill/119?offset=1' } };
   const pageTwo = { bills: [fixture.bills[1]], pagination: { count: 2 } };
-  const { urls, fetchImpl } = stubFetch([pageOne, pageTwo]);
+  const { urls, options, fetchImpl } = stubFetch([pageOne, pageTwo]);
 
   const pages = [];
   for await (const page of listPages({
@@ -68,7 +72,10 @@ test('listPages pages the bill-list endpoint with cursor, sort, and offset until
   assert.equal(urls.length, 2);
   const first = new URL(urls[0]);
   assert.equal(first.origin + first.pathname, 'https://api.congress.gov/v3/bill/119');
-  assert.equal(first.searchParams.get('api_key'), 'test-key');
+  // The key travels in the X-Api-Key header, never the URL — query strings
+  // leak into proxy/access logs and error objects.
+  assert.equal(first.searchParams.has('api_key'), false);
+  assert.deepEqual(options[0], { headers: { 'X-Api-Key': 'test-key' } });
   assert.equal(first.searchParams.get('fromDateTime'), '2025-04-01T00:00:00Z');
   assert.equal(first.searchParams.get('sort'), 'updateDate asc');
   assert.equal(first.searchParams.get('limit'), '1');
@@ -132,9 +139,57 @@ test('fetchPagesIntoRaw commits each page atomically: raw upserts + fetch-cursor
   assert.deepEqual(raw.params.slice(0, 3), ['congress-bills', 'hr1234-119', 'bill-list']);
   assert.deepEqual(JSON.parse(raw.params[3]), fixture.bills[0]);
 
-  // Per-page cursor advance goes to that page's max consumed updateDate.
-  assert.deepEqual(client.calls[2].params, ['congress-bills', '2025-04-02']);
-  assert.deepEqual(client.calls[6].params, ['congress-bills', '2025-04-03']);
+  // Per-page cursor advance goes to that page's max consumed updateDate,
+  // keyed per congress so changing the target congress starts a fresh
+  // backfill instead of silently filtering behind another congress's cursor.
+  assert.deepEqual(client.calls[2].params, ['congress-bills-119', '2025-04-02']);
+  assert.deepEqual(client.calls[6].params, ['congress-bills-119', '2025-04-03']);
+});
+
+test('fetchPagesUntilClean re-walks from the starting cursor until a pass writes nothing new', async () => {
+  // Pass 1: two pages, both bills new (boundary skips possible). Pass 2: the
+  // same two pages, nothing changed → converged. Offset pagination over a
+  // mutating updateDate sort can skip a boundary item; the clean re-walk from
+  // the SAME starting fromDateTime catches it (idempotent upserts make the
+  // overlap free).
+  const pageOne = { bills: [fixture.bills[0]], pagination: { count: 2, next: 'x' } };
+  const pageTwo = { bills: [fixture.bills[1]], pagination: { count: 2 } };
+  const { urls, fetchImpl } = stubFetch([pageOne, pageTwo, pageOne, pageTwo]);
+
+  let rawWrites = 0;
+  const client = stubClient((text) => {
+    if (!/INSERT INTO raw_payloads/i.test(text)) return { rows: [], rowCount: 1 };
+    rawWrites += 1;
+    return { rows: [], rowCount: rawWrites <= 2 ? 1 : 0 }; // pass 2 payloads identical
+  });
+
+  const result = await fetchPagesUntilClean({
+    client,
+    congress: 119,
+    apiKey: 'k',
+    fromDateTime: '2025-04-01T00:00:00Z',
+    limit: 1,
+    fetchImpl,
+  });
+
+  assert.equal(result.passes, 2);
+  assert.equal(result.upserted, 2);
+  assert.equal(result.unchanged, 2);
+  assert.equal(urls.length, 4);
+  // Both passes anchor at the run's starting cursor, offset 0.
+  for (const i of [0, 2]) {
+    const u = new URL(urls[i]);
+    assert.equal(u.searchParams.get('fromDateTime'), '2025-04-01T00:00:00Z');
+    assert.equal(u.searchParams.get('offset'), '0');
+  }
+});
+
+test('fetchPagesUntilClean stops after one pass when the run fit in a single page', async () => {
+  // A single-page run has no page boundary to skip across — no re-walk.
+  const { urls, fetchImpl } = stubFetch([{ bills: [fixture.bills[0]], pagination: { count: 1 } }]);
+  const result = await fetchPagesUntilClean({ client: stubClient(), congress: 119, apiKey: 'k', fetchImpl });
+  assert.equal(result.passes, 1);
+  assert.equal(urls.length, 1);
 });
 
 test('fetchPagesIntoRaw: a crash mid-run keeps earlier pages committed, and the rerun resumes from the committed cursor', async () => {
@@ -222,16 +277,22 @@ test('loadStaleRawsIntoBills upserts transformed raws and reports the consumed w
   const client = stubClient((text) =>
     /FROM raw_payloads/i.test(text) ? { rows: staleRows, rowCount: 2 } : { rows: [], rowCount: 1 });
 
-  const result = await loadStaleRawsIntoBills({ client, loadCursor: '2026-07-15T09:00:00.000000Z' });
+  const result = await loadStaleRawsIntoBills({
+    client,
+    loadCursor: '2026-07-15T09:00:00.000000Z',
+    batchSize: 500,
+  });
 
   assert.deepEqual(result, { ingested: 2, failed: 0, maxFetchedAt: '2026-07-15T09:30:00.000002Z' });
 
-  // The stale-raw read is cursor-filtered, ordered, and precision-preserving.
+  // The stale-raw read is cursor-filtered, ordered, precision-preserving, and
+  // bounded — batches of batchSize, never the whole backlog in memory.
   const read = client.calls[0];
   assert.match(read.text, /fetched_at > \$3/i);
-  assert.match(read.text, /ORDER BY fetched_at/i);
+  assert.match(read.text, /ORDER BY fetched_at, natural_key/i);
+  assert.match(read.text, /LIMIT \$4/i);
   assert.match(read.text, /to_char\(\s*fetched_at AT TIME ZONE 'UTC'/i);
-  assert.deepEqual(read.params, ['congress-bills', 'bill-list', '2026-07-15T09:00:00.000000Z']);
+  assert.deepEqual(read.params, ['congress-bills', 'bill-list', '2026-07-15T09:00:00.000000Z', 500]);
 
   // Bills upsert enriches existing stub rows instead of DO NOTHING-ing them.
   const upsert = client.calls[1];
@@ -240,7 +301,34 @@ test('loadStaleRawsIntoBills upserts transformed raws and reports the consumed w
   assert.equal(upsert.params[0], 'hr1234-119');
 });
 
-test('loadStaleRawsIntoBills counts a bad payload as failed and keeps going', async () => {
+test('loadStaleRawsIntoBills pages through the backlog in keyset batches', async () => {
+  // Three stale rows, batchSize 2: batch one fills (2 rows), so a second read
+  // follows keyed on the last row's (fetched_at, natural_key) — tuple keyset,
+  // not a bare fetched_at bound, because a whole fetch page shares one now().
+  const ts = '2026-07-15T09:30:00.000001Z';
+  const batchOne = [
+    { natural_key: 'hr1234-119', payload: fixture.bills[0], fetched_at: ts },
+    { natural_key: 'sres22-119', payload: fixture.bills[1], fetched_at: ts },
+  ];
+  const batchTwo = [
+    { natural_key: 'sres23-119', payload: { ...fixture.bills[1], number: '23' }, fetched_at: ts },
+  ];
+  let reads = 0;
+  const client = stubClient((text) => {
+    if (!/FROM raw_payloads/i.test(text)) return { rows: [], rowCount: 1 };
+    reads += 1;
+    return reads === 1 ? { rows: batchOne, rowCount: 2 } : { rows: batchTwo, rowCount: 1 };
+  });
+
+  const result = await loadStaleRawsIntoBills({ client, loadCursor: null, batchSize: 2 });
+
+  assert.deepEqual(result, { ingested: 3, failed: 0, maxFetchedAt: ts });
+  const secondRead = client.calls.filter((c) => /FROM raw_payloads/i.test(c.text))[1];
+  assert.match(secondRead.text, /\(fetched_at, natural_key\) > \(\$3, \$4\)/i);
+  assert.deepEqual(secondRead.params, ['congress-bills', 'bill-list', ts, 'sres22-119', 2]);
+});
+
+test('loadStaleRawsIntoBills counts a transform reject as failed and keeps going', async () => {
   const staleRows = [
     { natural_key: 'amdt1-119', payload: { ...fixture.bills[0], type: 'AMDT' }, fetched_at: '2026-07-15T09:30:00.000001Z' },
     { natural_key: 'sres22-119', payload: fixture.bills[1], fetched_at: '2026-07-15T09:30:00.000002Z' },
@@ -250,4 +338,23 @@ test('loadStaleRawsIntoBills counts a bad payload as failed and keeps going', as
 
   const result = await loadStaleRawsIntoBills({ client, loadCursor: null, log: () => {} });
   assert.deepEqual(result, { ingested: 1, failed: 1, maxFetchedAt: '2026-07-15T09:30:00.000002Z' });
+});
+
+test('loadStaleRawsIntoBills lets a database upsert error propagate — the cursor must not advance past it', async () => {
+  // Only transform rejects are the designed skip path. A row whose upsert
+  // fails transiently (deadlock, timeout) must fail the run so the unadvanced
+  // cursor re-reads it next hour — otherwise the payload-diff guard freezes
+  // its fetched_at and the bill is dropped forever.
+  const staleRows = [
+    { natural_key: 'hr1234-119', payload: fixture.bills[0], fetched_at: '2026-07-15T09:30:00.000001Z' },
+  ];
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: staleRows, rowCount: 1 };
+    throw new Error('deadlock detected');
+  });
+
+  await assert.rejects(
+    () => loadStaleRawsIntoBills({ client, loadCursor: null, log: () => {} }),
+    /deadlock detected/,
+  );
 });
