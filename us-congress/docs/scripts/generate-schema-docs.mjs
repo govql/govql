@@ -338,6 +338,15 @@ function parseSchema(sql) {
     };
   }
 
+  // ALTER TABLE … ADD COLUMN — later migrations extend earlier tables (one
+  // column per statement; keep migrations written that way for parseability)
+  const addColRe = /ALTER TABLE (\w+)\s+ADD COLUMN\s+([^;]+);/gi;
+  for (const m of sql.matchAll(addColRe)) {
+    const t = tables[m[1]];
+    if (!t) continue;
+    t.columns.push(...parseColumns(m[2]));
+  }
+
   // COMMENT ON TABLE — both plain 'text' and E'escape\ntext' forms
   const tblCmtRe = /COMMENT ON TABLE (\w+) IS E?'([\s\S]*?)';/g;
   for (const m of sql.matchAll(tblCmtRe)) {

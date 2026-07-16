@@ -87,6 +87,47 @@ export const nodes = [
     idempotency: 'per-congress DELETE + rebuild of both aggregate tables and the watermark, in one transaction',
   },
   {
+    id: 'fetch-bills',
+    stage: 'fetch',
+    domain: 'bills',
+    upstream: [],
+    reads: ['external:Congress.gov API v3 bill-list endpoint (api.congress.gov)'],
+    writes: ['table:raw_payloads', 'table:source_state', 'table:ingestion_runs'],
+    trigger: {
+      cron: { file: 'ingester/ingest_cron', schedule: '5 * * * *', match: 'src/fetch-bills.js' },
+      readiness:
+        'loud clean skip when CONGRESS_GOV_API_KEY is unset; otherwise pages fromDateTime = fetch cursor (NULL cursor = backfill)',
+    },
+    watermark: {
+      table: 'source_state',
+      key: "source_name='congress-bills', stage='fetch'",
+      advances:
+        'to the max consumed updateDate, in the same transaction as each committed page of raw_payloads (crash resumes from the last committed page)',
+    },
+    idempotency:
+      'raw_payloads ON CONFLICT (source_name, natural_key, endpoint) DO UPDATE, guarded by payload IS DISTINCT FROM so unchanged bills do not touch fetched_at',
+  },
+  {
+    id: 'ingest-bills',
+    stage: 'load',
+    domain: 'bills',
+    upstream: ['fetch-bills'],
+    reads: ['table:raw_payloads', 'table:source_state'],
+    writes: ['table:bills', 'table:ingestion_runs', 'table:source_state'],
+    trigger: {
+      cron: { file: 'ingester/ingest_cron', schedule: '20 * * * *', match: 'src/ingest-bills.js' },
+      readiness:
+        "staleness gate on the owned raw_payloads table: runs iff max(fetched_at) > load.cursor (or load.cursor unset), for 'congress-bills' (rawReadiness)",
+    },
+    watermark: {
+      table: 'source_state',
+      key: "source_name='congress-bills', stage='load'",
+      advances: 'to the max consumed raw_payloads.fetched_at, atomically with the ingestion_runs success row',
+    },
+    idempotency:
+      'bills ON CONFLICT (bill_id) DO UPDATE (enriches vote-stub rows; identity columns never change)',
+  },
+  {
     id: 'scrape-legislators',
     stage: 'fetch',
     domain: 'legislators',

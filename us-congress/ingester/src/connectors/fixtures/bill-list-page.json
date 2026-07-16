@@ -1,0 +1,42 @@
+{
+  "bills": [
+    {
+      "congress": 119,
+      "latestAction": {
+        "actionDate": "2025-04-01",
+        "text": "Referred to the Committee on Ways and Means."
+      },
+      "number": "1234",
+      "originChamber": "House",
+      "originChamberCode": "H",
+      "title": "Example Tax Relief Act of 2025",
+      "type": "HR",
+      "updateDate": "2025-04-02",
+      "updateDateIncludingText": "2025-04-02T07:15:31Z",
+      "url": "https://api.congress.gov/v3/bill/119/hr/1234?format=json"
+    },
+    {
+      "congress": 119,
+      "latestAction": {
+        "actionDate": "2025-04-02",
+        "text": "Read twice and referred to the Committee on the Judiciary."
+      },
+      "number": "22",
+      "originChamber": "Senate",
+      "originChamberCode": "S",
+      "title": "A resolution designating April 2025 as Example Awareness Month.",
+      "type": "SRES",
+      "updateDate": "2025-04-03",
+      "updateDateIncludingText": "2025-04-03T00:12:09Z",
+      "url": "https://api.congress.gov/v3/bill/119/sres/22?format=json"
+    }
+  ],
+  "pagination": {
+    "count": 2
+  },
+  "request": {
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  }
+}

@@ -349,6 +349,16 @@ Copy your `.env.keys` file to the droplet (never commit this file):
 scp us-congress/.env.keys govql@YOUR_DROPLET_IP:/opt/govql/us-congress/.env.keys
 ```
 
+Set the Congress.gov API key (request one at https://api.congress.gov/sign-up/) so
+the hourly bills ingestion runs — without it the fetch cron logs a loud skip and
+does nothing. `CONGRESS_GOV_TARGET_CONGRESS` (default `119`) picks which congress
+to ingest, and is the backfill-depth knob:
+
+```bash
+# Run from us-congress/ (locally and on the droplet)
+dotenvx set CONGRESS_GOV_API_KEY your-api-key
+```
+
 ### 4. Install dotenvx
 
 ```bash

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   isReady,
   readCursor,
+  advanceFetchCursor,
   advanceLoadCursor,
   loadReadiness,
 } from './cursor-state.js';
@@ -83,6 +84,22 @@ test('advanceLoadCursor: upserts the captured fetch value into the load stage', 
   // flipping it to 'fetch' would corrupt the handshake yet pass every other check.
   assert.match(text, /'load'/);
   assert.deepEqual(params, ['congress-votes', value]);
+});
+
+test('advanceFetchCursor: upserts the consumed source watermark into the fetch stage', async () => {
+  // An API-source fetcher (Congress.gov bills) advances its own fetch cursor to
+  // the max consumed source updateDate, per committed page.
+  const value = '2026-07-01';
+  const client = stubClient();
+  await advanceFetchCursor(client, 'congress-bills', value);
+
+  assert.equal(client.calls.length, 1);
+  const { text, params } = client.calls[0];
+  assert.match(text, /INSERT INTO source_state/i);
+  assert.match(text, /ON CONFLICT/i);
+  // Pin the stage literal, mirroring the advanceLoadCursor pin above.
+  assert.match(text, /'fetch'/);
+  assert.deepEqual(params, ['congress-bills', value]);
 });
 
 test('loadReadiness: reads fetch then load and reports ready + captured fetch', async () => {

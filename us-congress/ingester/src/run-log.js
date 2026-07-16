@@ -1,0 +1,38 @@
+// Shared ingestion_runs logging, extracted as part of the source-connector
+// contract (see CONNECTORS.md). Mirrors the open/succeed/fail lifecycle the
+// existing stages write inline: a 'running' row at start, closed atomically
+// with the stage's cursor advance on success (call succeedRun inside that
+// transaction), or marked failed from the stage's catch block.
+//
+// Pool-free like cursor-state.js — takes a client, unit-testable with stubs.
+
+/** Open a 'running' ingestion_runs row; returns its id. */
+export async function openRun(client, runType, sourceParams = null) {
+  const { rows } = await client.query(
+    `INSERT INTO ingestion_runs (run_type, status, source_params)
+     VALUES ($1, 'running', $2)
+     RETURNING id`,
+    [runType, sourceParams === null ? null : JSON.stringify(sourceParams)],
+  );
+  return rows[0].id;
+}
+
+/** Close a run as successful with the number of records upserted. */
+export async function succeedRun(client, runId, recordsUpserted) {
+  await client.query(
+    `UPDATE ingestion_runs
+     SET finished_at = now(), status = 'success', records_upserted = $1
+     WHERE id = $2`,
+    [recordsUpserted, runId],
+  );
+}
+
+/** Close a run as failed with the error message. */
+export async function failRun(client, runId, errorMessage) {
+  await client.query(
+    `UPDATE ingestion_runs
+     SET finished_at = now(), status = 'failed', error_message = $1
+     WHERE id = $2`,
+    [errorMessage, runId],
+  );
+}

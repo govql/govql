@@ -50,6 +50,23 @@ export async function readCursor(client, sourceName, stage) {
 }
 
 /**
+ * Advance the `fetch` cursor for a source. Used by API-source fetchers
+ * (Congress.gov bills) that track their own watermark — the max consumed
+ * source updateDate — advanced inside the same transaction as each committed
+ * page of raw payloads, so a crash resumes from the last committed page.
+ * (File-source fetch cursors are written by the scraper's shell script instead.)
+ */
+export async function advanceFetchCursor(client, sourceName, value) {
+  await client.query(
+    `INSERT INTO source_state (source_name, stage, cursor, updated_at)
+     VALUES ($1, 'fetch', $2, now())
+     ON CONFLICT (source_name, stage)
+       DO UPDATE SET cursor = EXCLUDED.cursor, updated_at = now()`,
+    [sourceName, value],
+  );
+}
+
+/**
  * Advance the `load` cursor for a source to the `fetch` value the run just
  * consumed. Called only after a successful run, so a crash mid-run leaves the
  * cursor unadvanced and the next run re-checks readiness and re-walks
