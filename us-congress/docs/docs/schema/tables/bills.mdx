@@ -6,7 +6,7 @@ sidebar_position: 5
 
 # Bill
 
-Legislation referenced by roll call votes. Not a comprehensive bill database — populated from vote cross-references.
+Bills and resolutions. For congresses covered by Congress.gov ingestion (currently the configured target congress, 119), rows carry real bill data — display title, latest action, source timestamps — refreshed hourly; other congresses have stub rows created from vote cross-references (bill id, type, number only). bill_id format: [bill_type][number]-[congress], e.g. hr3590-111.
 
 **GraphQL type:** `Bill` · **Connection:** `BillsConnection`
 
@@ -39,6 +39,10 @@ Legislation referenced by roll call votes. Not a comprehensive bill database —
 | `sourceUpdatedAt` | `Datetime` |  |
 | `createdAt` | `Datetime` |  |
 | `updatedAt` | `Datetime` |  |
+| `title` | `String` | Display title from Congress.gov (the latest title for the bill). |
+| `policyArea` | `String` | Primary policy area assigned by CRS (populated by per-bill detail ingestion, task 0011). |
+| `latestAction` | `String` | Text of the most recent action on the bill, from Congress.gov. |
+| `latestActionAt` | `Date` | Date of the most recent action on the bill. |
 
 ## Relationships
 

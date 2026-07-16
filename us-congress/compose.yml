@@ -122,6 +122,12 @@ services:
       - HEALTHCHECK_LEGISLATORS_INGEST_URL
       # Optional dead-man's-switch URL for the separate build-aggregates job.
       - HEALTHCHECK_VOTE_AGGREGATES_URL
+      # Congress.gov API ingestion (bills). Without the key, the bills fetch
+      # cron is a loud, clean skip. Target congress is the backfill-depth knob.
+      - CONGRESS_GOV_API_KEY
+      - CONGRESS_GOV_TARGET_CONGRESS
+      - HEALTHCHECK_BILLS_FETCH_URL
+      - HEALTHCHECK_BILLS_INGEST_URL
       # Cap the V8 heap — the ingester is mostly idle so 64 MB is ample.
       - NODE_OPTIONS=--max-old-space-size=64
     volumes:

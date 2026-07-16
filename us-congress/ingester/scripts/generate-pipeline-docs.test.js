@@ -327,10 +327,18 @@ test('runCheck ignores file: and external: entries — only table: entries are v
   assert.deepEqual(runCheck(inputs), []);
 });
 
-test('the real manifest names the five pipeline nodes', () => {
+test('the real manifest names the seven pipeline nodes', () => {
   assert.deepEqual(
     realNodes.map((n) => n.id),
-    ['scrape-votes', 'ingest-votes', 'build-aggregates', 'scrape-legislators', 'ingest-legislators'],
+    [
+      'scrape-votes',
+      'ingest-votes',
+      'build-aggregates',
+      'fetch-bills',
+      'ingest-bills',
+      'scrape-legislators',
+      'ingest-legislators',
+    ],
   );
 });
 

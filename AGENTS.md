@@ -135,7 +135,8 @@ The `us-congress` Postgres schema is managed with **Flyway**.
 
 The per-table API docs are generated from the migration files by
 `us-congress/docs/scripts/generate-schema-docs.mjs`. Keep migrations hand-written,
-readable SQL (the generator parses `CREATE TABLE` / `COMMENT ON` statements);
+readable SQL (the generator parses `CREATE TABLE` / `COMMENT ON` /
+`ALTER TABLE … ADD COLUMN` statements — one column per `ADD COLUMN`);
 re-run `npm run generate-schema-docs` after schema changes.
 
 ## Ingestion pipeline manifest & docs
@@ -159,6 +160,12 @@ New nodes follow the master plan's ingestion decisions
 ([`plans/PLAN.md`](plans/PLAN.md) "Staged cursors" and "Gating rule"): an
 opaque/external input gets a `source_state` fetch→load cursor handshake; an
 owned DB table gets a staleness comparison against its watermark.
+
+New sources implement the **source-connector contract** — module shape, where
+raw lands per source type (files for scraped sources, `raw_payloads` for API
+sources), watermark rules, and the shared helpers — documented in
+[`us-congress/ingester/CONNECTORS.md`](us-congress/ingester/CONNECTORS.md),
+with the Congress.gov bills connector as the reference implementation.
 
 ## Timestamps: JavaScript milliseconds vs Postgres microseconds
 
