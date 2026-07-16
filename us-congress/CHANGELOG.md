@@ -32,6 +32,8 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## [2026-07-16]
+
 ### Added
 
 - **Congress.gov bill data**: bills are now ingested hourly from the Congress.gov API (starting
