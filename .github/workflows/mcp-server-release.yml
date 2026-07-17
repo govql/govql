@@ -1,12 +1,15 @@
 name: mcp-server-release
 
-# Publishes govql-mcp-server to PyPI when a release tag is pushed, replacing
-# the manual `uv publish` runbook. The tag is the single source of truth for
-# the version being released: a guardrail fails the run if the tagged commit's
-# pyproject.toml or CHANGELOG.md disagrees with it. Publishing waits at the
-# `pypi` GitHub Environment's required-reviewer approval — the same one-click
-# gate pattern as the us-congress production deploy. Runbook:
-# mcp-server/RELEASE.md.
+# Publishes govql-mcp-server when a release tag is pushed, replacing the
+# manual `uv publish` runbook. The tag is the single source of truth: a
+# guardrail fails the run if the tagged commit's pyproject.toml or
+# CHANGELOG.md disagrees with the tagged version, and the version's shape
+# picks the destination — a final X.Y.Z publishes to PyPI and creates the
+# GitHub Release; an X.Y.ZrcN tag is a TestPyPI rehearsal (sandbox upload,
+# no Release), so rehearsing needs no workflow edits and nothing can leak
+# into a real release (#95). Publishing waits at a GitHub Environment's
+# required-reviewer approval either way — the same one-click gate pattern
+# as the us-congress production deploy. Runbook: mcp-server/RELEASE.md.
 on:
   push:
     tags:
@@ -68,14 +71,24 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    # The manual gate: `pypi` is a GitHub Environment with a required
-    # reviewer, so the run pauses here for a one-click approval before
-    # anything reaches PyPI. The environment name is also part of the Trusted
-    # Publisher registration on PyPI — an upload from any other environment
-    # (or workflow, or repo) is refused server-side.
+    # The manual gate: `pypi` and `testpypi` are GitHub Environments with a
+    # required reviewer, so the run pauses here for a one-click approval
+    # before anything is uploaded. The tag routes which one (and, below,
+    # which index): an `rc` version is a rehearsal, a final version is a
+    # release. The contains() check can only match the version segment — the
+    # literal tag prefix `govql-mcp-server-v` contains no "rc" — and rc is
+    # the only pre-release form this project tags (RELEASE.md §6).
+    # The environment name is also part of the Trusted Publisher
+    # registration on each index (pypi ↔ pypi.org, testpypi ↔ test.pypi.org),
+    # and an upload from any other environment (or workflow, or repo) is
+    # refused server-side — so even a mis-routed run couldn't cross the
+    # streams: its OIDC identity wouldn't match the other index's publisher.
     environment:
-      name: pypi
-      url: https://pypi.org/project/govql-mcp-server/
+      name: ${{ contains(github.ref_name, 'rc') && 'testpypi' || 'pypi' }}
+      url: >-
+        ${{ contains(github.ref_name, 'rc')
+        && 'https://test.pypi.org/project/govql-mcp-server/'
+        || 'https://pypi.org/project/govql-mcp-server/' }}
     permissions:
       # OIDC: lets this job mint the short-lived identity token that PyPI's
       # Trusted Publishing exchanges for a scoped upload token — no
@@ -98,21 +111,28 @@ jobs:
           path: dist
 
       # Trusted Publishing (OIDC): the action authenticates as this repo +
-      # workflow + environment (as registered on PyPI), verifies the package
-      # metadata, uploads, and generates PEP 740 attestations — all by
-      # default. release/v1 is the action's maintained stable branch, its
+      # workflow + environment (as registered on the index), verifies the
+      # package metadata, uploads, and generates PEP 740 attestations — all
+      # by default. release/v1 is the action's maintained stable branch, its
       # documented pin (it publishes no major-version tag like the actions/*
-      # family). TestPyPI rehearsal: uncomment repository-url and follow
-      # RELEASE.md's rehearsal section.
-      - name: Publish to PyPI
+      # family). The || arm is the action's own default URL, spelled out so
+      # both routes are explicit rather than one hiding behind a default.
+      - name: Publish (PyPI, or TestPyPI for rc tags)
         uses: pypa/gh-action-pypi-publish@release/v1
-        # with:
-        #   repository-url: https://test.pypi.org/legacy/
+        with:
+          repository-url: >-
+            ${{ contains(github.ref_name, 'rc')
+            && 'https://test.pypi.org/legacy/'
+            || 'https://upload.pypi.org/legacy/' }}
 
-      # The GitHub Release mirrors PyPI — created only after the upload
-      # succeeds, with the version's CHANGELOG section as the notes and the
-      # published files attached for the audit trail.
+      # The GitHub Release mirrors PyPI — created only for final versions,
+      # after the upload succeeds, with the version's CHANGELOG section as
+      # the notes and the published files attached for the audit trail.
+      # rc tags skip it: a rehearsal must not put anything on the repo's
+      # public Releases page (the first rehearsal's Release got badged
+      # "Latest" — #95).
       - name: Create GitHub Release
+        if: ${{ !contains(github.ref_name, 'rc') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
