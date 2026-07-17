@@ -31,10 +31,11 @@ ALTER TABLE vote_similarity
     (party_a IS DISTINCT FROM party_b) STORED;
 
 -- Backfill: each member's dominant vote-time party within the congress+chamber
--- — the party they cast the most Yea/Nay positions under (vote_positions
+-- — the party they cast the most up-or-down positions under, classified by
+-- meaning (Yea/Aye/Guilty = yes, Nay/No/Not Guilty = no; vote_positions
 -- snapshots party at vote time), ties broken alphabetically for determinism.
--- Same derivation the ingester's rebuild computes (build-aggregates.js), with
--- two migration-specific differences:
+-- Same derivation the ingester's rebuild computes (build-aggregates.js
+-- party_counts), with two migration-specific differences:
 --   * per-congress loop, mirroring the rebuild's $1 scoping — one congress's
 --     positions at a time keeps every aggregate/sort memory-bounded no matter
 --     what plan the optimizer picks (see the SET LOCAL note above);
@@ -51,7 +52,8 @@ BEGIN
       SELECT vp.bioguide_id, vp.party, v.chamber
       FROM vote_positions vp
       JOIN votes v ON v.vote_id = vp.vote_id
-      WHERE v.congress = c AND vp.position IN ('Yea', 'Nay')
+      WHERE v.congress = c
+        AND vp.position IN ('Yea', 'Aye', 'Guilty', 'Nay', 'No', 'Not Guilty')
         AND vp.party IS NOT NULL
     ),
     party_counts AS (
@@ -107,7 +109,7 @@ CREATE INDEX idx_vote_similarity_cross_party_rate
 -- agents read it via describe_type) and describe the new columns.
 COMMENT ON TABLE vote_similarity IS E'Pairwise voting agreement, per congress: one row per (congress, chamber, member_a, member_b) with shared_votes (both cast Yea/Nay), agreed (voted the same), each member''s party, and a stored agreement_rate (agreed / shared_votes). Pairs are stored once with member_a < member_b (by bioguide id), so party_a/party_b follow member order, not a canonical party order — filter cross_party = true to select different-party pairs regardless of order. Independents count as their own party, so cross-party rankings lead with I–D caucus pairs; for strict D–R pairs filter party_a/party_b in both orders. Rank with orderBy AGREEMENT_RATE_DESC plus a shared_votes floor (e.g. greaterThanOrEqualTo: 100); rates on tiny overlaps are noise. Maintained by the vote ingester. Join legislatorByMemberA / legislatorByMemberB for each member''s name and details — party is per-congress and NOT a field on legislators; it is carried here as party_a/party_b (see member_party_agreement for member-vs-party loyalty).';
 
-COMMENT ON COLUMN vote_similarity.party_a IS E'member_a''s dominant vote-time party in this congress+chamber — the party they cast the most Yea/Nay positions under (vote_positions snapshots party at vote time). A rare mid-congress switcher gets the party they voted under more often; ties break alphabetically.';
+COMMENT ON COLUMN vote_similarity.party_a IS E'member_a''s dominant vote-time party in this congress+chamber — the party they cast the most up-or-down positions under, counting by meaning (Yea, Aye, and Guilty are yes-votes; Nay, No, and Not Guilty are no-votes; vote_positions snapshots party at vote time). A rare mid-congress switcher gets the party they voted under more often; ties break alphabetically.';
 
 COMMENT ON COLUMN vote_similarity.party_b IS E'member_b''s dominant vote-time party in this congress+chamber — see party_a for the derivation.';
 

@@ -40,9 +40,13 @@ cross-party filtering — with no second copy of ~2M rows.
    `vote_similarity`; no new relation, no ingester bookkeeping changes, all
    GraphQL changes additive.
 2. **`party_a` / `party_b` = dominant vote-time party**: the party the member
-   cast the most Yea/Nay positions under within that congress+chamber (from
-   `vote_positions.party`, the same vote-time snapshot the sibling aggregate
-   uses), tie-broken alphabetically for determinism. *Not* latest-term party
+   cast the most up-or-down positions under within that congress+chamber,
+   counting by meaning — Yea/Aye/Guilty as yes-votes, Nay/No/Not Guilty as
+   no-votes (from `vote_positions.party`, the same vote-time snapshot the
+   sibling aggregate uses), tie-broken alphabetically for determinism. The
+   dominance filter is deliberately independent of the pair-counting filter,
+   which still counts literal Yea/Nay pending the vocabulary fix tracked
+   separately. *Not* latest-term party
    (would label a 2005 pair with a 2026 party) and *not* split rows per party
    stint (changes the row identity and would roughly double the heaviest build
    stage). A rare mid-congress switcher (e.g. Van Drew, 116th) gets one label:
