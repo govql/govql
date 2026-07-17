@@ -19,7 +19,7 @@
 - Do NOT push or open a PR — the user performs all GitHub operations.
 - Local stack prerequisite: `dotenvx` must decrypt `us-congress/.env` (the box has run this stack before). If `dotenvx run` fails, stop and report — do not improvise credentials.
 
-**Working directory for all commands:** `/home/astout5/govql/us-congress` unless stated.
+**Working directory for all commands:** `us-congress` unless stated.
 
 ---
 
@@ -35,7 +35,7 @@ No repo files change in this task (nothing to commit). It builds the environment
 - [ ] **Step 1: Bring the stack up (old code, migrations V001–V006)**
 
 ```bash
-cd /home/astout5/govql/us-congress
+cd us-congress
 dotenvx run -- docker compose -f compose.yml -f compose.dev.yml up --build -d postgres redis server ingester scraper
 docker ps --format '{{.Names}}\t{{.Status}}' | grep us-congress
 ```
@@ -266,7 +266,7 @@ PSQL "CREATE UNLOGGED TABLE vote_similarity_backfill_check AS SELECT congress, c
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/astout5/govql
+cd "$(git rev-parse --show-toplevel)"
 git add us-congress/db/migrations/V007__vote_similarity_cross_party_ranking.sql
 git commit -m "feat(us-congress): add party + agreement-rate columns to vote_similarity (#87)"
 ```
@@ -343,8 +343,8 @@ INSERT, watermark, transaction) stays untouched.
 - [ ] **Step 2: Syntax check + ingester test suite**
 
 ```bash
-node --check /home/astout5/govql/us-congress/ingester/src/build-aggregates.js
-cd /home/astout5/govql/us-congress/ingester && npm test && npm run check-pipeline-docs
+node --check us-congress/ingester/src/build-aggregates.js
+cd us-congress/ingester && npm test && npm run check-pipeline-docs
 ```
 
 Expected: no syntax error; existing tests pass; pipeline docs check passes
@@ -354,7 +354,7 @@ the container after Step 3's rebuild instead: `docker exec us-congress-ingester-
 - [ ] **Step 3: Rebuild the ingester image and force a full rebuild**
 
 ```bash
-cd /home/astout5/govql/us-congress
+cd us-congress
 dotenvx run -- docker compose -f compose.yml -f compose.dev.yml up --build -d ingester
 PSQL "DELETE FROM vote_similarity_state"    # every congress becomes stale
 docker exec us-congress-ingester-1 node /app/src/build-aggregates.js
@@ -397,7 +397,7 @@ Expected: a scan of `idx_vote_similarity_cross_party_rate` (no Sort node).
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/astout5/govql
+cd "$(git rev-parse --show-toplevel)"
 git add us-congress/ingester/src/build-aggregates.js
 git commit -m "feat(us-congress): fill vote_similarity party columns in the aggregate rebuild (#87)"
 ```
@@ -497,7 +497,7 @@ pair", `crossParty` already handles order for you.
 - [ ] **Step 3: Verify docs render assumptions**
 
 ```bash
-grep -n "AGREED_DESC" /home/astout5/govql/us-congress/docs/docs/schema/index.md
+grep -n "AGREED_DESC" us-congress/docs/docs/schema/index.md
 ```
 
 Expected: no matches remain in the Voting similarity block (the old example is
@@ -522,7 +522,7 @@ Leave the stack running or `dotenvx run -- docker compose -f compose.yml -f comp
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/astout5/govql
+cd "$(git rev-parse --show-toplevel)"
 git add us-congress/CHANGELOG.md us-congress/docs/docs/schema/index.md
 git commit -m "docs(us-congress): document cross-party ranking fields on VoteSimilarity (#87)"
 ```
