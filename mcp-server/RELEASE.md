@@ -137,7 +137,10 @@ git push origin govql-mcp-server-vX.Y.Z
 ```
 
 The tag namespace (`govql-mcp-server-`) keeps it clear of other sub-projects'
-future tags. The push starts the workflow:
+future tags. The push starts the workflow; watch it in the repo's Actions
+tab, where a tag-triggered run files under the tag's name, not on any branch
+or PR (`git push` only confirms the push reached GitHub, not that the run
+passed):
 
 1. **build**: `uv build`, plus the guardrail: the run fails immediately if
    the tag version ≠ `pyproject.toml` version, or `CHANGELOG.md` has no entry
@@ -209,17 +212,20 @@ A rehearsal is therefore just a throwaway `rc` tag; there are no workflow
 edits to make or revert.
 
 1. On a throwaway branch, bump `pyproject.toml` to `X.Y.ZrcN` and add a
-   matching `## [X.Y.ZrcN]` CHANGELOG heading (the guardrail applies to
-   rehearsals too). The `rc` segment is what routes the run to TestPyPI,
-   and incrementing N gives retry room: uploads are immutable on TestPyPI
-   too, so a failed run needs a fresh number (`rc2`, `rc3`).
+   matching `## [X.Y.ZrcN]` CHANGELOG heading. This is not optional: the
+   guardrail applies to rehearsals too, so tagging without the bump fails
+   the run at its first step. The `rc` segment is what routes the run to
+   TestPyPI, and incrementing N gives retry room: uploads are immutable on
+   TestPyPI too, so a failed run needs a fresh number (`rc2`, `rc3`).
 2. Tag that commit and push only the tag, so the rehearsal branch never
    appears in a PR:
    ```bash
    git tag -a govql-mcp-server-vX.Y.ZrcN -m "TestPyPI rehearsal"
    git push origin govql-mcp-server-vX.Y.ZrcN
    ```
-3. Watch the full run: the guardrail, the pause at the `testpypi` gate, your
+3. Watch the run from the repo's Actions tab; like any tag-triggered run it
+   files under the tag's name (§3), so a guardrail failure is visible only
+   there. Expect: the guardrail, the pause at the `testpypi` gate, your
    approval, the TestPyPI upload, and no GitHub Release afterwards. To
    install what was published, add TestPyPI as an extra index instead of
    replacing PyPI, since the runtime dependencies exist only on the real
