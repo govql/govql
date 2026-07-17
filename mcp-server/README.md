@@ -79,6 +79,9 @@ is `uvx govql-mcp-server` with no required arguments.
 | `find_vote` | Browse roll-call votes by category, chamber, or congress (newest first), or keyword-search the vote `question`. `topic` matches the question text (which includes bill short titles) — not a full subject index, so it misses procedural votes, and bill subjects aren't populated yet. Returns a compact list with each `voteId`. |
 | `get_legislator` | Full detail for one member by bioguide id: names, bio, and complete term history (party/state/chamber/district over time) with a `current` block. |
 | `get_vote_with_positions` | One vote by id with tallies and per-party breakdown; optionally the individual member positions (filter by party/state/position). |
+| `get_voting_record` | A member's voting behavior per congress: participation rate and party-loyalty rate, from the precomputed summaries. |
+| `compare_voters` | How often two members voted the same way, per congress+chamber, with an agreement rate. |
+| `find_party_defectors` | Members who least often voted with their own party's majority in a congress; optional party/chamber filters. |
 
 ## Configuration
 
@@ -107,11 +110,14 @@ Vote data refreshes hourly; legislator data refreshes daily.
 
 ## Status
 
-As of 0.3.0, the server provides the three foundational tools (`execute_graphql`,
+As of 0.4.0, the server provides the three foundational tools (`execute_graphql`,
 `list_types`, `describe_type`) plus the curated **discovery** tools
-(`find_legislator`, `find_vote`) and **per-entity detail** tools
-(`get_legislator`, `get_vote_with_positions`). Further curated tools (analysis —
-`get_voting_record`, `compare_voters`, …) are planned for subsequent releases — see
+(`find_legislator`, `find_vote`), **per-entity detail** tools (`get_legislator`,
+`get_vote_with_positions`), and **analysis** tools (`get_voting_record`,
+`compare_voters`, `find_party_defectors`) — the curated discovery/detail/analysis
+set is now complete. The remaining `most_agreeing_pairs` and bill/committee
+tools are post-v0.4: the bill/committee tools await GovQL data population, and
+`most_agreeing_pairs` awaits a server-side cross-party ranking aggregate — see
 [design.md](https://github.com/govql/govql/blob/main/mcp-server/docs/design.md).
 
 ## Links

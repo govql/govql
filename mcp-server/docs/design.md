@@ -1,8 +1,7 @@
 # Design
 
 This document explains why `govql-mcp-server` exists, what it deliberately
-isn't, and where it's going. It's aimed at contributors and at anyone trying
-to understand the philosophy from the outside.
+isn't, and where it's going.
 
 ## Why this exists
 
@@ -19,7 +18,7 @@ read the response. MCP collapses those three steps into one tool call.
 The MCP server is therefore a distribution channel — it makes GovQL
 addressable from any MCP-compatible client without bespoke wiring.
 
-## Philosophy: thin layer + (eventually) curated tools
+## Core design: passthrough + curated tools
 
 There are two shapes an MCP server like this could take:
 
@@ -30,10 +29,12 @@ There are two shapes an MCP server like this could take:
   `get_voting_record`, `compare_voters`. Easier for agents to call
   correctly; more code to maintain; only as up-to-date as the maintainer.
 
-v0.1 ships *only* the thin layer: `execute_graphql` plus two narrow
+v0.1 shipped the thin layer only: `execute_graphql` plus two narrow
 schema-discovery tools (`list_types` and `describe_type`).
-The roadmap below adds curated tools incrementally — but the passthrough
-stays as the escape hatch. The rule for adding a curated tool is: it should
+Curated tools have been added incrementally, but the passthrough
+stays as the escape hatch.
+
+The rule for adding a curated tool is: it should
 embody a query pattern that's either non-obvious from the schema, expensive
 if done naively, or so common it deserves a first-class slot. If the
 GraphQL is obvious, let passthrough handle it.
@@ -43,12 +44,10 @@ GraphQL is obvious, let passthrough handle it.
 The rest of the GovQL monorepo is JavaScript. Choosing Python here was a
 deliberate trade-off, weighed in the project's planning docs:
 
-- The planned curated layer is 10–15 tools. FastMCP-Python derives JSON
-  schemas from Python type hints, which removes hundreds of lines of
-  hand-written schema boilerplate that the TypeScript SDK would require.
+- FastMCP-Python derives JSON schemas from Python type hints, which removes
+  hundreds of lines of schema boilerplate that the TypeScript SDK would require.
 - FastMCP-Python ships an in-memory test client, so tests don't have to
-  spawn a subprocess and parse JSON-RPC manually. The whole test suite
-  runs in under a second.
+  spawn a subprocess and parse JSON-RPC manually. The test suite runs in seconds.
 - The third-party `fastmcp` for TypeScript is a different author's wrapper
   that lags upstream — it didn't offer compelling enough ergonomics over
   the official `@modelcontextprotocol/sdk` to justify pulling it in.
@@ -60,34 +59,7 @@ project (no shared linter, no shared lockfile, no proxied build commands).
 
 ## Roadmap
 
-v0.1 ships the foundation. **v0.1.1** then closed a discoverability gap: with
-the derived analytics views now deployed in the data layer, `execute_graphql`
-points agents at them (`VoteSimilarity`, `MemberPartyAgreement`, and the
-per-vote / per-member tally views) so analytical questions use the precomputed
-views instead of brute-forcing over raw `VotePosition` rows.
-
-### Next up (before v0.2)
-
-Testing v0.1.1 against the motivating question — *"which two opposing-party
-members vote together most often?"* — showed that the agent found
-`VoteSimilarity` but still fell back to fetching the whole (~96k-row for a
-House congress) pairwise slice and joining party client-side, because
-`vote_similarity` carried no relation back to `legislators` the way
-`member_party_agreement` did. `vote_similarity.member_a`/`member_b` now carry
-foreign keys to `legislators` (shipped in #63), so PostGraphile exposes
-`legislatorByMemberA` / `legislatorByMemberB` — party and name come back
-inline in one query instead of a separate lookup. That's a step toward a
-future cross-party `most_agreeing_pairs` tool (post-v0.4).
-
-- **Passthrough robustness.** `execute_graphql` returns whatever the query
-  returns and #36 left no page-size cap, so a large connection can overflow the
-  agent's context (observed: a full pairwise fetch had to be spilled to a file).
-  Add a docstring rule to use `orderBy` + a small `first:` for "top-N" questions,
-  and optionally a soft response-size guard that truncates + warns. Small
-  standalone MCP patch (behavior change → not folded into the docs-only v0.1.1).
-
-Each subsequent version is independently shippable and adds tools that fall
-into one of three categories:
+Each minor version beyond v0.1 adds tools that fall into one of three categories:
 
 - **v0.2 — Discovery/lookup tools** (`find_legislator`, `find_vote`): the
   tools an agent reaches for when it doesn't yet know specific IDs.
@@ -97,6 +69,12 @@ into one of three categories:
 - **v0.4 — Aggregation/analysis tools** (`get_voting_record`,
   `compare_voters`, `find_party_defectors`): tools that answer questions, not
   just retrieve data.
+  `compare_voters`, `find_party_defectors`): tools that answer questions, not
+  just retrieve data.
+
+As of 0.4.0, all three milestones above have shipped — the curated
+discovery/detail/analysis set is complete. The roadmap continues below at
+Post-v0.4.
 
 Past v0.4, the project's wishlist shifts back to improving GovQL itself first
 — populating the `bills`/`cosponsors`/`committees` tables, a NL-query helper
