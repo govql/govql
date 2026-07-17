@@ -67,13 +67,15 @@ A free account at [mcp.so](https://mcp.so) for the listing update in §5.
 
 ---
 
-## 1. Prepare the release (on the release PR)
+## 1. Prepare the release (on the separate release PR)
 
-The version bump ships as a normal PR through the lint + test gate:
+The version bump ships as a separate PR through the lint + test gate:
 
 - Bump `version` in `pyproject.toml`.
-- Move/write the `CHANGELOG.md` entry for that exact version (the workflow
-  greps for `## [X.Y.Z]` and refuses to publish without it).
+- Move/write the `CHANGELOG.md` entry for that exact version, dated with the
+  day you'll tag; heading dates are release dates, set at release time rather
+  than when the feature work landed (the workflow greps for `## [X.Y.Z]` and
+  refuses to publish without it).
 - `README.md` describes the *current* tool set (no "coming soon" wording).
 
 Then the usual local pre-flight from `mcp-server/`:
