@@ -178,9 +178,43 @@ across all congresses and categories.
 
 **Voting similarity** — pairwise agreement between members within a congress is
 precomputed in `allVoteSimilarities` (all congresses). Each row gives `sharedVotes`
-(votes where both members cast a Yea/Nay) and `agreed` (votes where they matched);
-compute the agreement ratio as `agreed / sharedVotes`. Filter by `congress` (and
-usually `chamber`). Find a member's closest allies in a given congress:
+(votes where both members cast a Yea/Nay), `agreed` (votes where they matched),
+`agreementRate` (`agreed / sharedVotes`, ready to sort on), each member's party
+(`partyA`/`partyB`, their dominant party across that congress+chamber), and
+`crossParty` (true when the party labels differ). Filter by `congress` (and
+usually `chamber`), and pair rate sorting with a `sharedVotes` floor — rates on
+tiny overlaps are noise (but note a high floor also excludes members seated
+mid-congress; lower it when they matter). Find the pairs with different party
+labels who vote together most:
+
+```graphql
+{
+  allVoteSimilarities(
+    filter: {
+      congress: { equalTo: 119 }
+      chamber: { equalTo: "s" }
+      crossParty: { equalTo: true }
+      sharedVotes: { greaterThanOrEqualTo: 100 }
+    }
+    orderBy: AGREEMENT_RATE_DESC
+    first: 10
+  ) {
+    nodes {
+      legislatorByMemberA { officialFull }
+      legislatorByMemberB { officialFull }
+      partyA partyB sharedVotes agreementRate
+    }
+  }
+}
+```
+
+The top of that ranking is naturally dominated by Independents: each `I` label
+counts as its own party, so a senator who caucuses (and votes) with the
+Democrats still forms "cross-party" pairs with them. For strictly D-vs-R
+pairs, filter both party orders explicitly instead of `crossParty`:
+`or: [{ partyA: { equalTo: "D" }, partyB: { equalTo: "R" } }, { partyA: { equalTo: "R" }, partyB: { equalTo: "D" } }]`.
+
+Or a member's closest allies in a given congress:
 
 ```graphql
 {
@@ -189,17 +223,21 @@ usually `chamber`). Find a member's closest allies in a given congress:
       congress: { equalTo: 119 }
       chamber: { equalTo: "s" }
       memberA: { equalTo: "W000817" }
+      sharedVotes: { greaterThanOrEqualTo: 100 }
     }
-    orderBy: AGREED_DESC
+    orderBy: AGREEMENT_RATE_DESC
     first: 5
   ) {
-    nodes { memberB sharedVotes agreed }
+    nodes { memberB sharedVotes agreed agreementRate }
   }
 }
 ```
 
-Pairs are stored once with `memberA < memberB`, so to find all of one member's
-pairings you may need to match on `memberA` **or** `memberB`.
+Pairs are stored once with `memberA < memberB` (by bioguide id), so to find all
+of one member's pairings you may need to match on `memberA` **or** `memberB` —
+and `partyA`/`partyB` follow that member order too. That's why party-specific
+matchups need the both-orders `or:` filter shown above, while `crossParty` is
+order-free.
 
 **Member-vs-party agreement** — how often each member voted *with a party* is
 precomputed in `allMemberPartyAgreements` (all congresses). On each vote, a party's

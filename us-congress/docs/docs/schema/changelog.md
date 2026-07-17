@@ -39,6 +39,34 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ### Added
 
+- **Cross-party agreement ranking on `VoteSimilarity`**: each pair now carries
+  `partyA` / `partyB` (each member's dominant vote-time party for that
+  congress+chamber), a stored `agreementRate` (`agreed / sharedVotes` — so
+  `orderBy: AGREEMENT_RATE_DESC` ranks server-side), and `crossParty`, a
+  symmetric different-party flag that works regardless of pair storage order.
+  "Which opposing-party members vote together most?" is now one query: filter
+  `{ crossParty: { equalTo: true }, sharedVotes: { greaterThanOrEqualTo: 100 } }`
+  and order by `AGREEMENT_RATE_DESC`. All four fields are filterable and
+  orderable. Independents count as their own party (so `crossParty` rankings
+  lead with I–D caucus pairs); for strict D–R pairs, filter `partyA`/`partyB`
+  in both orders with `or:`.
+
+## [2026-07-16]
+
+### Added
+
+- **Congress.gov bill data**: bills are now ingested hourly from the Congress.gov API (starting
+  with congress 119), so `Bill` rows carry real data instead of vote-stub placeholders. New
+  fields on `Bill`: `title` (Congress.gov's display title, distinct from the existing
+  `officialTitle`/`shortTitle`/`popularTitle`), `latestAction` and `latestActionAt` (the most
+  recent action's text and date), and `policyArea` (present in the schema now; populated when
+  per-bill detail ingestion lands). `sourceUpdatedAt` reflects the Congress.gov update
+  timestamp. (#89)
+
+## [2026-07-14]
+
+### Added
+
 - **Legislator relations on `vote_similarity`**: `member_a` and `member_b` now have foreign keys to
   `legislators`, so the API exposes `legislatorByMemberA` / `legislatorByMemberB` — each pair returns
   the two members' names and other legislator details inline instead of bare bioguide IDs. The reverse
