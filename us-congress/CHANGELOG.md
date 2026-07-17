@@ -32,6 +32,8 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## [2026-07-17]
+
 ### Added
 
 - **Cross-party agreement ranking on `VoteSimilarity`**: each pair now carries
