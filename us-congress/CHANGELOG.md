@@ -32,6 +32,18 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+### Added
+
+- **Cross-party agreement ranking on `VoteSimilarity`**: each pair now carries
+  `partyA` / `partyB` (each member's dominant vote-time party for that
+  congress+chamber), a stored `agreementRate` (`agreed / sharedVotes` — so
+  `orderBy: AGREEMENT_RATE_DESC` ranks server-side), and `crossParty`, a
+  symmetric opposing-party flag that works regardless of pair storage order.
+  "Which opposing-party members vote together most?" is now one query: filter
+  `{ crossParty: { equalTo: true }, sharedVotes: { greaterThanOrEqualTo: 100 } }`
+  and order by `AGREEMENT_RATE_DESC`. All four fields are filterable and
+  orderable.
+
 ## [2026-07-16]
 
 ### Added
