@@ -180,10 +180,12 @@ across all congresses and categories.
 precomputed in `allVoteSimilarities` (all congresses). Each row gives `sharedVotes`
 (votes where both members cast a Yea/Nay), `agreed` (votes where they matched),
 `agreementRate` (`agreed / sharedVotes`, ready to sort on), each member's party
-(`partyA`/`partyB`, their dominant party on those votes), and `crossParty`
-(true when the parties differ). Filter by `congress` (and usually `chamber`),
-and pair rate sorting with a `sharedVotes` floor — rates on tiny overlaps are
-noise. Find the opposing-party pairs who vote together most:
+(`partyA`/`partyB`, their dominant party across that congress+chamber), and
+`crossParty` (true when the party labels differ). Filter by `congress` (and
+usually `chamber`), and pair rate sorting with a `sharedVotes` floor — rates on
+tiny overlaps are noise (but note a high floor also excludes members seated
+mid-congress; lower it when they matter). Find the pairs with different party
+labels who vote together most:
 
 ```graphql
 {
@@ -206,6 +208,12 @@ noise. Find the opposing-party pairs who vote together most:
 }
 ```
 
+The top of that ranking is naturally dominated by Independents: each `I` label
+counts as its own party, so a senator who caucuses (and votes) with the
+Democrats still forms "cross-party" pairs with them. For strictly D-vs-R
+pairs, filter both party orders explicitly instead of `crossParty`:
+`or: [{ partyA: { equalTo: "D" }, partyB: { equalTo: "R" } }, { partyA: { equalTo: "R" }, partyB: { equalTo: "D" } }]`.
+
 Or a member's closest allies in a given congress:
 
 ```graphql
@@ -227,9 +235,9 @@ Or a member's closest allies in a given congress:
 
 Pairs are stored once with `memberA < memberB` (by bioguide id), so to find all
 of one member's pairings you may need to match on `memberA` **or** `memberB` —
-and `partyA`/`partyB` follow that member order too. To select specific party
-matchups (say D–R), filter both orders with `or:`; for "any opposing-party
-pair", `crossParty` already handles order for you.
+and `partyA`/`partyB` follow that member order too. That's why party-specific
+matchups need the both-orders `or:` filter shown above, while `crossParty` is
+order-free.
 
 **Member-vs-party agreement** — how often each member voted *with a party* is
 precomputed in `allMemberPartyAgreements` (all congresses). On each vote, a party's
