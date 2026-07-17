@@ -32,25 +32,34 @@ scoped upload token.
 
 ### TestPyPI pending publisher
 
-TestPyPI is a separate instance with its own accounts and its own namespace,
-where `govql-mcp-server` doesn't exist. A publisher can't attach to a project
-that isn't there, so registration happens at the account level instead. On
+TestPyPI is a separate instance of PyPI with its own accounts and its own
+namespace. If `govql-mcp-server` doesn't exist there (rehearsal uploads are
+what create it), a publisher can't attach to the project's settings, so
+registration happens at the account level instead. On
 [test.pypi.org/manage/account/publishing](https://test.pypi.org/manage/account/publishing/),
-add a **pending publisher** with the same values as above, plus:
+add a **pending publisher**:
 
 - **PyPI Project Name:** `govql-mcp-server`
+- **Owner:** `govql` / **Repository:** `govql`
+- **Workflow name:** `mcp-server-release.yml`
+- **Environment name:** `testpypi` (rehearsals run under their own
+  environment, distinct from the real release's `pypi`; see below)
 
 The first successful publish creates the project and promotes the pending
 publisher to a normal one, so a rehearsal never needs an API token either. A
 pending publisher doesn't reserve the name; the project exists only once a
 rehearsal actually uploads (§6).
 
-### GitHub `pypi` Environment
+### GitHub Environments: `pypi` and `testpypi`
 
 In the repo settings (requires admin): Settings → Environments → New
-environment → `pypi`, with a **required reviewer** added. The reviewer
+environment, once as `pypi` (real releases) and once as `testpypi`
+(rehearsals), each with a **required reviewer** added. The reviewer
 requirement is the approval gate; remove it to graduate to fully unattended
-releases.
+releases. The workflow picks the environment from the tag: an `rc` version
+runs under `testpypi`, a final version under `pypi`. Each environment name
+is bound into the matching index's publisher registration above, so the two
+identities can't cross even if a run were somehow mis-routed.
 
 ### MCP registry (mcp.so) account
 
@@ -58,13 +67,15 @@ A free account at [mcp.so](https://mcp.so) for the listing update in §5.
 
 ---
 
-## 1. Prepare the release (on the release PR)
+## 1. Prepare the release (on the separate release PR)
 
-The version bump ships as a normal PR through the lint + test gate:
+The version bump ships as a separate PR through the lint + test gate:
 
 - Bump `version` in `pyproject.toml`.
-- Move/write the `CHANGELOG.md` entry for that exact version (the workflow
-  greps for `## [X.Y.Z]` and refuses to publish without it).
+- Move/write the `CHANGELOG.md` entry for that exact version, dated with the
+  day you'll tag; heading dates are release dates, set at release time rather
+  than when the feature work landed (the workflow greps for `## [X.Y.Z]` and
+  refuses to publish without it).
 - `README.md` describes the *current* tool set (no "coming soon" wording).
 
 Then the usual local pre-flight from `mcp-server/`:
@@ -128,7 +139,10 @@ git push origin govql-mcp-server-vX.Y.Z
 ```
 
 The tag namespace (`govql-mcp-server-`) keeps it clear of other sub-projects'
-future tags. The push starts the workflow:
+future tags. The push starts the workflow; watch it in the repo's Actions
+tab, where a tag-triggered run files under the tag's name, not on any branch
+or PR (`git push` only confirms the push reached GitHub, not that the run
+passed):
 
 1. **build**: `uv build`, plus the guardrail: the run fails immediately if
    the tag version ≠ `pyproject.toml` version, or `CHANGELOG.md` has no entry
@@ -137,6 +151,10 @@ future tags. The push starts the workflow:
 2. **publish**: pauses at the `pypi` environment gate. GitHub emails the
    required reviewer; approve from the run page (Actions →
    mcp-server-release).
+
+The version's shape routes the run: a final `X.Y.Z` tag publishes to PyPI
+and creates the GitHub Release; an `X.Y.ZrcN` tag is a TestPyPI rehearsal
+(§6), pauses at the `testpypi` gate instead, and creates no Release.
 
 ---
 
@@ -187,32 +205,43 @@ artifact behaves like the local build did.
 
 ---
 
-## 6. TestPyPI rehearsal (for changes to the release workflow itself)
+## 6. TestPyPI rehearsal (`rc` tags)
 
-The publish step can't be exercised by a PR; only a tag push runs it. To
-rehearse an end-to-end release without touching real PyPI:
+The publish step can't be exercised by a PR; only a tag push runs it. The
+workflow routes on the tag itself: a version with an `rc` segment publishes
+to TestPyPI under the `testpypi` environment and creates no GitHub Release.
+A rehearsal is therefore just a throwaway `rc` tag; there are no workflow
+edits to make or revert.
 
-1. Make sure the TestPyPI pending publisher is registered (§0).
-2. On your workflow branch, uncomment the `repository-url:
-   https://test.pypi.org/legacy/` lines in the publish step.
-3. Push a throwaway tag pointing at the branch (`govql-mcp-server-vX.Y.Zrc1`,
-   with a matching temporary `pyproject.toml`/CHANGELOG bump on the branch,
-   since the guardrail applies to rehearsals too). Use an `rc` suffix rather
-   than the real version: uploads are immutable on TestPyPI too, so a failed
-   run that needs a retry needs a fresh version number.
-4. Watch the full run: the guardrail, the pause at the gate, your approval,
-   the TestPyPI upload, the GitHub Release. To install what was published,
-   add TestPyPI as an extra index instead of replacing PyPI, since the
-   runtime dependencies exist only on the real index:
+1. On a throwaway branch, bump `pyproject.toml` to `X.Y.ZrcN` and add a
+   matching `## [X.Y.ZrcN]` CHANGELOG heading. This is not optional: the
+   guardrail applies to rehearsals too, so tagging without the bump fails
+   the run at its first step. The `rc` segment is what routes the run to
+   TestPyPI, and incrementing N gives retry room: uploads are immutable on
+   TestPyPI too, so a failed run needs a fresh number (`rc2`, `rc3`).
+2. Tag that commit and push only the tag, so the rehearsal branch never
+   appears in a PR:
+   ```bash
+   git tag -a govql-mcp-server-vX.Y.ZrcN -m "TestPyPI rehearsal"
+   git push origin govql-mcp-server-vX.Y.ZrcN
+   ```
+3. Watch the run from the repo's Actions tab; like any tag-triggered run it
+   files under the tag's name (§3), so a guardrail failure is visible only
+   there. Expect: the guardrail, the pause at the `testpypi` gate, your
+   approval, the TestPyPI upload, and no GitHub Release afterwards. To
+   install what was published, add TestPyPI as an extra index instead of
+   replacing PyPI, since the runtime dependencies exist only on the real
+   index:
    ```bash
    uvx --index https://test.pypi.org/simple/ \
-     --from govql-mcp-server==X.Y.Zrc1 govql-mcp-server
+     --from govql-mcp-server==X.Y.ZrcN govql-mcp-server
    ```
-5. Clean up: delete the throwaway tag and GitHub Release, re-comment the
-   `repository-url` lines. TestPyPI itself needs no cleanup; it's a sandbox.
+4. Clean up: delete the throwaway tag (`git push origin
+   :refs/tags/govql-mcp-server-vX.Y.ZrcN`, then `git tag -d` locally) and
+   drop the branch. TestPyPI itself needs no cleanup; it's a sandbox.
 
 A tag-push workflow runs the workflow file **as of the tagged commit**, so a
-rehearsal can run from a branch before it merges.
+rehearsal also exercises workflow changes from a branch before they merge.
 
 ---
 
