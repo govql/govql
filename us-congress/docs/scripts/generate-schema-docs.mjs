@@ -97,6 +97,8 @@ const TABLE_ORDER = [
   'bills',
   'committees',
   'bill_cosponsors',
+  'bill_subjects',
+  'bill_summaries',
   'bill_committees',
   'committee_memberships',
 ];

@@ -11,8 +11,55 @@ import { advanceFetchCursor, advanceVerifiedFetchCursor, readCursor } from '../c
 export const SOURCE_NAME = 'congress-bills';
 
 // Endpoint tag for raw_payloads rows written by this connector's list fetch.
-// Task 0011's per-bill sub-entity fetches will use their own tags.
 export const LIST_ENDPOINT = 'bill-list';
+
+// Endpoint tags for the per-bill fan-out (task 0011): one raw_payloads row
+// per endpoint per bill, alongside the bill's bill-list row.
+export const DETAIL_ENDPOINT = 'bill-detail';
+export const COSPONSORS_ENDPOINT = 'bill-cosponsors';
+export const SUBJECTS_ENDPOINT = 'bill-subjects';
+export const SUMMARIES_ENDPOINT = 'bill-summaries';
+export const TITLES_ENDPOINT = 'bill-titles';
+
+// The five per-bill endpoints the fan-out pulls for every changed bill.
+// `single` endpoints store one unwrapped object; `items` endpoints follow
+// pagination.next and store the merged item array in `merge`'s wrap shape, so
+// a stored payload is always the bill's complete current set.
+const SUB_ENDPOINTS = [
+  { endpoint: DETAIL_ENDPOINT, suffix: '', single: (page) => page.bill ?? null },
+  {
+    endpoint: COSPONSORS_ENDPOINT,
+    suffix: '/cosponsors',
+    items: (page) => page.cosponsors ?? [],
+    merge: (items) => ({ cosponsors: items }),
+  },
+  {
+    endpoint: SUBJECTS_ENDPOINT,
+    suffix: '/subjects',
+    items: (page) => page.subjects?.legislativeSubjects ?? [],
+    merge: (items, firstPage) => ({
+      legislativeSubjects: items,
+      policyArea: firstPage?.subjects?.policyArea ?? null,
+    }),
+  },
+  {
+    endpoint: SUMMARIES_ENDPOINT,
+    suffix: '/summaries',
+    items: (page) => page.summaries ?? [],
+    merge: (items) => ({ summaries: items }),
+  },
+  {
+    endpoint: TITLES_ENDPOINT,
+    suffix: '/titles',
+    items: (page) => page.titles ?? [],
+    merge: (items) => ({ titles: items }),
+  },
+];
+
+// Requests one bill's fan-out needs when no sub-endpoint paginates — the
+// budget check per bill. Pagination follows may overrun this; see
+// requestBudget on why a started bill always finishes.
+export const FANOUT_REQUESTS_PER_BILL = SUB_ENDPOINTS.length;
 
 /**
  * source_state key for one congress's fetch cursor. Keyed per congress —
@@ -34,6 +81,29 @@ export const DEFAULT_BASE_URL = 'https://api.congress.gov/v3';
 export const DEFAULT_PAGE_SIZE = 250;
 
 /**
+ * Per-run request budget against the api.data.gov hourly rate limit. `take`
+ * records spending; `has` answers whether n more requests fit, and a refusal
+ * latches `exhausted` — the signal the fetch stages use to stop cleanly (the
+ * next cron tick resumes from the committed cursors). Spending is allowed to
+ * finish what it started: once a bill's fan-out begins, its pagination
+ * follows complete even past the limit, so a stored payload is never a
+ * truncated merge — the default cap leaves headroom for that overrun.
+ */
+export function requestBudget(limit = Infinity) {
+  let used = 0;
+  let exhausted = false;
+  return {
+    take(n = 1) { used += n; },
+    has(n = 1) {
+      if (used + n > limit) exhausted = true;
+      return used + n <= limit;
+    },
+    get used() { return used; },
+    get exhausted() { return exhausted; },
+  };
+}
+
+/**
  * Async generator over bill-list pages for one congress, sorted by updateDate
  * ascending so the fetch cursor can advance monotonically page by page.
  * `fromDateTime` (the fetch cursor) is omitted when null — that is the
@@ -47,9 +117,14 @@ export async function* listPages({
   limit = DEFAULT_PAGE_SIZE,
   baseUrl = DEFAULT_BASE_URL,
   fetchImpl = fetch,
+  budget = null,
 }) {
   let offset = 0;
   for (;;) {
+    // A refused budget check latches budget.exhausted, which the caller reads
+    // as "this walk was truncated" (complete = false).
+    if (budget && !budget.has(1)) return;
+    budget?.take(1);
     const params = new URLSearchParams({
       format: 'json',
       sort: 'updateDate asc',
@@ -106,12 +181,93 @@ function maxUpdateDate(bills, current) {
 }
 
 /**
+ * The per-bill API path for the fan-out, or null when the list item cannot
+ * form one (unknown type, non-numeric number/congress). Same strictness as
+ * `transform`: a malformed item must not produce a garbage URL that 404s the
+ * whole run forever — it is skipped and counted instead.
+ */
+function fanoutPath(item) {
+  const type = String(item.type ?? '').toLowerCase();
+  if (!BILL_TYPES.has(type)) return null;
+  if (!/^\d+$/.test(String(item.number ?? '')) || !/^\d+$/.test(String(item.congress ?? ''))) return null;
+  return `/bill/${Number.parseInt(item.congress, 10)}/${type}/${Number.parseInt(item.number, 10)}`;
+}
+
+/**
+ * Fetch one per-bill endpoint, following pagination.next for the collection
+ * endpoints so the stored payload is the complete current set. Every request
+ * (including pagination follows) is charged to the budget; a started bill is
+ * never truncated mid-merge, so the overrun past a refused check is bounded
+ * by one bill's pagination.
+ */
+async function fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget }) {
+  const failed = (status, url) => new Error(
+    `Congress.gov ${descriptor.endpoint} request failed with HTTP ${status} (${url.replace(/\?.*$/, '')})`,
+  );
+
+  if (descriptor.single) {
+    const url = `${baseUrl}${path}${descriptor.suffix}?format=json`;
+    budget?.take(1);
+    const response = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey } });
+    if (!response.ok) throw failed(response.status, url);
+    return descriptor.single(await response.json());
+  }
+
+  const items = [];
+  let firstPage = null;
+  let url = `${baseUrl}${path}${descriptor.suffix}?format=json&limit=${limit}`;
+  for (;;) {
+    budget?.take(1);
+    const response = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey } });
+    if (!response.ok) throw failed(response.status, url);
+    const page = await response.json();
+    firstPage ??= page;
+    items.push(...descriptor.items(page));
+    if (!page.pagination?.next) break;
+    url = page.pagination.next;
+  }
+  return descriptor.merge(items, firstPage);
+}
+
+/**
+ * Land all five per-bill endpoints for one changed bill in raw_payloads,
+ * inside the caller's open chunk transaction. Same diff-guarded upsert as the
+ * list rows: an identical payload leaves fetched_at untouched, so the load
+ * side only sees endpoints that actually changed.
+ */
+async function fetchSubEndpointsIntoRaw({ client, key, path, apiKey, baseUrl, limit, fetchImpl, budget }) {
+  for (const descriptor of SUB_ENDPOINTS) {
+    const payload = await fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget });
+    await client.query(
+      `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (source_name, natural_key, endpoint)
+         DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
+         WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
+      [SOURCE_NAME, key, descriptor.endpoint, JSON.stringify(payload)],
+    );
+  }
+}
+
+// Bills per fan-out chunk transaction. Small enough that one chunk's five
+// fetches per changed bill stay a short transaction (the load's grace cap
+// assumes fetch transactions land within minutes), large enough that the
+// per-chunk cursor write is noise.
+export const DEFAULT_FANOUT_CHUNK_SIZE = 25;
+
+/**
  * Fetch stage core: page the list endpoint and land each page in raw_payloads,
- * committing the page's upserts AND the fetch-cursor advance (max consumed
- * updateDate) in one transaction — a crash resumes from the last committed
- * page, and a NULL starting cursor is the backfill. The payload-diff guard on
- * the upsert means unchanged bills don't touch fetched_at, so a rerun with
- * nothing new upstream stays a no-op for the load stage too.
+ * committing in chunks — each chunk's list upserts, its changed bills' five
+ * per-bill endpoint fetches (`fanout`), AND the fetch-cursor advance (max
+ * consumed updateDate) in one transaction. A crash or budget bail-out resumes
+ * from the last committed chunk, and a NULL starting cursor is the backfill.
+ * The payload-diff guard on the upsert means unchanged bills don't touch
+ * fetched_at AND don't fan out, so a resumed or no-op rerun never re-fetches
+ * a completed bill's sub-entities.
+ *
+ * A bill's list row and its fan-out are atomic on purpose: committing the
+ * list row without its sub-entities would make the resume see the bill as
+ * unchanged and skip its fan-out forever.
  */
 export async function fetchPagesIntoRaw({
   client,
@@ -123,57 +279,90 @@ export async function fetchPagesIntoRaw({
   fetchImpl = fetch,
   onPage = () => {},
   upsertedKeys = null, // optional Set: collects distinct written natural keys across passes
+  fanout = null,       // {chunkSize?} — enable the per-bill sub-entity fan-out
+  budget = null,       // requestBudget shared across list pages and fan-out
+  log = () => {},
 }) {
   let cursor = fromDateTime;
   let pages = 0;
   let upserted = 0;
   let unchanged = 0;
+  let fanoutSkipped = 0; // malformed list items that cannot form a per-bill URL
   // A walk is complete when it ended because the API advertised no further
-  // page — NOT when an anomalous empty-page-with-next truncated it. The
-  // verification logic must never treat a truncated pass as proof of coverage.
+  // page — NOT when an anomalous empty-page-with-next truncated it, and not
+  // when the request budget ran out. The verification logic must never treat
+  // a truncated pass as proof of coverage.
   let complete = true;
+  const chunkSize = fanout?.chunkSize ?? DEFAULT_FANOUT_CHUNK_SIZE;
 
-  for await (const page of listPages({ congress, apiKey, fromDateTime, limit, baseUrl, fetchImpl })) {
+  pageLoop:
+  for await (const page of listPages({ congress, apiKey, fromDateTime, limit, baseUrl, fetchImpl, budget })) {
     const bills = page.bills ?? [];
     if (bills.length === 0) {
       complete = !page.pagination?.next;
       break;
     }
 
-    await client.query('BEGIN');
-    try {
-      for (const item of bills) {
-        const key = naturalKey(item);
-        const { rowCount } = await client.query(
-          `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
-           VALUES ($1, $2, $3, $4, now())
-           ON CONFLICT (source_name, natural_key, endpoint)
-             DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
-             WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
-          [SOURCE_NAME, key, LIST_ENDPOINT, JSON.stringify(item)],
-        );
-        if (rowCount === 1) {
-          upserted += 1;
-          upsertedKeys?.add(key);
-        } else {
-          unchanged += 1;
+    for (let start = 0; start < bills.length; start += chunkSize) {
+      const chunk = bills.slice(start, start + chunkSize);
+      let stopped = false;
+      await client.query('BEGIN');
+      try {
+        let chunkMax = cursor;
+        for (const item of chunk) {
+          // Stop BEFORE the bill's list upsert: landing the list row without
+          // its fan-out would hide the bill from the resumed run.
+          if (fanout && budget && !budget.has(FANOUT_REQUESTS_PER_BILL)) {
+            stopped = true;
+            break;
+          }
+          const key = naturalKey(item);
+          const { rowCount } = await client.query(
+            `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
+             VALUES ($1, $2, $3, $4, now())
+             ON CONFLICT (source_name, natural_key, endpoint)
+               DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
+               WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
+            [SOURCE_NAME, key, LIST_ENDPOINT, JSON.stringify(item)],
+          );
+          if (rowCount === 1) {
+            upserted += 1;
+            upsertedKeys?.add(key);
+            if (fanout) {
+              const path = fanoutPath(item);
+              if (path === null) {
+                fanoutSkipped += 1;
+                log(`Skipping sub-entity fan-out for malformed list item ${key} (type/number/congress unusable)`);
+              } else {
+                await fetchSubEndpointsIntoRaw({ client, key, path, apiKey, baseUrl, limit, fetchImpl, budget });
+              }
+            }
+          } else {
+            unchanged += 1;
+          }
+          const d = item.updateDate ?? null;
+          if (d !== null && (chunkMax === null || d > chunkMax)) chunkMax = d;
         }
+        if (chunkMax !== null && chunkMax !== cursor) {
+          await advanceFetchCursor(client, fetchStateName(congress), chunkMax);
+          cursor = chunkMax;
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
       }
-      const pageMax = maxUpdateDate(bills, cursor);
-      if (pageMax !== null && pageMax !== cursor) {
-        await advanceFetchCursor(client, fetchStateName(congress), pageMax);
-        cursor = pageMax;
+      if (stopped) {
+        complete = false;
+        break pageLoop;
       }
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
     }
     pages += 1;
     onPage({ pages, upserted, unchanged, cursor });
   }
 
-  return { pages, upserted, unchanged, cursor, complete };
+  if (budget?.exhausted) complete = false;
+  return { pages, upserted, unchanged, fanoutSkipped, cursor, complete };
 }
 
 /**
@@ -211,6 +400,8 @@ export async function fetchPagesUntilClean({
   onPage = () => {},
   maxPasses = 5,
   log = () => {},
+  fanout = null,
+  budget = null,
 }) {
   const stateName = fetchStateName(congress);
   const resume = await readCursor(client, stateName, 'fetch');
@@ -236,6 +427,9 @@ export async function fetchPagesUntilClean({
       fromDateTime: anchorFormatted,
       upsertedKeys,
       onPage: (p) => onPage({ ...p, pass }),
+      fanout,
+      budget,
+      log,
     });
     pages += result.pages;
     unchanged += result.unchanged;
@@ -257,6 +451,16 @@ export async function fetchPagesUntilClean({
   // catch-up itself was truncated by an anomalous empty page.
   let owesVerification = first.pages > 1 || resume !== verified || !first.complete;
   while (owesVerification) {
+    // A drained budget cannot fund a verification re-walk — burning the
+    // remaining passes on immediately-truncated walks would prove nothing.
+    // The verified cursor stays behind and the next run resumes from it.
+    if (budget?.exhausted) {
+      log(
+        `Bills fetch stopped at the request budget (${budget.used} requests) — ` +
+        `verification deferred; the next run resumes from the committed cursors`,
+      );
+      return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: false };
+    }
     if (passes >= maxPasses) {
       log(
         `Bills fetch verification did not converge after ${passes} passes — ` +
@@ -296,18 +500,60 @@ export function capWatermark({ consumed, graceCap, loadCursor }) {
 /**
  * Load-stage readiness. raw_payloads is an owned table, so per the plan's
  * gating rule this is a staleness comparison — max(fetched_at) vs the load
- * cursor — not the file-source fetch↔load handshake. Reads max(fetched_at)
- * as a full-precision string (see cursor-state.js on why never a JS Date).
+ * cursor — not the file-source fetch↔load handshake. Source-wide across all
+ * six endpoints (one load cursor spans them), so freshness on any endpoint
+ * triggers the run. Reads max(fetched_at) as a full-precision string (see
+ * cursor-state.js on why never a JS Date).
  */
 export async function rawReadiness(client, loadCursor) {
   const { rows } = await client.query(
     `SELECT to_char(max(fetched_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS max_fetched_at
-     FROM raw_payloads WHERE source_name = $1 AND endpoint = $2`,
-    [SOURCE_NAME, LIST_ENDPOINT],
+     FROM raw_payloads WHERE source_name = $1`,
+    [SOURCE_NAME],
   );
   const maxFetchedAt = rows[0]?.max_fetched_at ?? null;
   const ready = maxFetchedAt !== null && (loadCursor === null || maxFetchedAt > loadCursor);
   return { maxFetchedAt, ready };
+}
+
+/**
+ * Async generator over one endpoint's raw_payloads backlog past the load
+ * cursor, in keyset batches — (fetched_at, natural_key) tuple bounds, never a
+ * bare fetched_at bound, because every row of a fetch transaction shares one
+ * transaction-start now() and a bare bound would skip the rest of a tie group
+ * cut by LIMIT. This is the chunked-read helper CONNECTORS.md flagged for
+ * extraction "when the second consumer arrives" — the 0011 sub-entity
+ * loaders are that consumer.
+ */
+async function* staleRawBatches({ client, endpoint, loadCursor, batchSize }) {
+  let after = null; // {fetchedAt, naturalKey} keyset position within this run
+  for (;;) {
+    const { rows } = after === null
+      ? await client.query(
+          `SELECT natural_key, payload,
+                  to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
+           FROM raw_payloads
+           WHERE source_name = $1 AND endpoint = $2
+             AND ($3::timestamptz IS NULL OR fetched_at > $3)
+           ORDER BY fetched_at, natural_key
+           LIMIT $4`,
+          [SOURCE_NAME, endpoint, loadCursor, batchSize],
+        )
+      : await client.query(
+          `SELECT natural_key, payload,
+                  to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
+           FROM raw_payloads
+           WHERE source_name = $1 AND endpoint = $2
+             AND (fetched_at, natural_key) > ($3, $4)
+           ORDER BY fetched_at, natural_key
+           LIMIT $5`,
+          [SOURCE_NAME, endpoint, after.fetchedAt, after.naturalKey, batchSize],
+        );
+    if (rows.length > 0) yield rows;
+    if (rows.length < batchSize) return;
+    const last = rows[rows.length - 1];
+    after = { fetchedAt: last.fetched_at, naturalKey: last.natural_key };
+  }
 }
 
 /**
@@ -337,31 +583,8 @@ export async function loadStaleRawsIntoBills({ client, loadCursor, batchSize = 5
   let ingested = 0;
   let failed = 0;
   let maxFetchedAt = loadCursor;
-  let after = null; // {fetchedAt, naturalKey} keyset position within this run
 
-  for (;;) {
-    const { rows } = after === null
-      ? await client.query(
-          `SELECT natural_key, payload,
-                  to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
-           FROM raw_payloads
-           WHERE source_name = $1 AND endpoint = $2
-             AND ($3::timestamptz IS NULL OR fetched_at > $3)
-           ORDER BY fetched_at, natural_key
-           LIMIT $4`,
-          [SOURCE_NAME, LIST_ENDPOINT, loadCursor, batchSize],
-        )
-      : await client.query(
-          `SELECT natural_key, payload,
-                  to_char(fetched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS fetched_at
-           FROM raw_payloads
-           WHERE source_name = $1 AND endpoint = $2
-             AND (fetched_at, natural_key) > ($3, $4)
-           ORDER BY fetched_at, natural_key
-           LIMIT $5`,
-          [SOURCE_NAME, LIST_ENDPOINT, after.fetchedAt, after.naturalKey, batchSize],
-        );
-
+  for await (const rows of staleRawBatches({ client, endpoint: LIST_ENDPOINT, loadCursor, batchSize })) {
     for (const raw of rows) {
       let row = null;
       try {
@@ -397,10 +620,6 @@ export async function loadStaleRawsIntoBills({ client, loadCursor, batchSize = 5
       }
       if (maxFetchedAt === null || raw.fetched_at > maxFetchedAt) maxFetchedAt = raw.fetched_at;
     }
-
-    if (rows.length < batchSize) break;
-    const last = rows[rows.length - 1];
-    after = { fetchedAt: last.fetched_at, naturalKey: last.natural_key };
   }
 
   return { ingested, failed, maxFetchedAt };
@@ -412,6 +631,368 @@ export async function loadStaleRawsIntoBills({ client, loadCursor, batchSize = 5
  * per-bill endpoints (task 0011) and are left untouched by the upsert.
  * Throws on payloads that cannot form a valid natural key.
  */
+// ---------------------------------------------------------------------------
+// Task 0011: sub-entity load stage. Each loader walks its endpoint's stale
+// raws (same cursor-gated keyset batches as the bills load), transforms, and
+// applies per bill. Error asymmetry matches loadStaleRawsIntoBills: transform
+// rejects are deterministic — counted, logged, skipped; DB errors propagate
+// so the unadvanced cursor re-reads the row. A raw whose bills row is missing
+// (its list item was transform-rejected) is counted and skipped — also
+// deterministic, and inserting it would violate the bill_id FK.
+// ---------------------------------------------------------------------------
+
+async function loadStaleEndpointRaws({ client, endpoint, loadCursor, batchSize, log, transformRaw, apply }) {
+  let processed = 0;
+  let failed = 0;
+  let skippedMissingBill = 0;
+  let maxFetchedAt = loadCursor;
+
+  for await (const rows of staleRawBatches({ client, endpoint, loadCursor, batchSize })) {
+    for (const raw of rows) {
+      let data = null;
+      try {
+        data = transformRaw(raw.payload);
+      } catch (err) {
+        failed += 1;
+        log(`Failed to transform ${endpoint} raw payload ${raw.natural_key}: ${err.message}`);
+      }
+      if (data !== null) {
+        const { rowCount } = await client.query('SELECT 1 FROM bills WHERE bill_id = $1', [raw.natural_key]);
+        if (rowCount === 0) {
+          skippedMissingBill += 1;
+          log(`Skipping ${endpoint} raw ${raw.natural_key}: no bills row (its list item was rejected)`);
+        } else {
+          await apply({ client, billId: raw.natural_key, data, log });
+          processed += 1;
+        }
+      }
+      if (maxFetchedAt === null || raw.fetched_at > maxFetchedAt) maxFetchedAt = raw.fetched_at;
+    }
+  }
+
+  return { processed, failed, skippedMissingBill, maxFetchedAt };
+}
+
+/**
+ * Replace one bill's cosponsors from its cosponsors payload. DELETE +
+ * re-INSERT inside a transaction (the payload is the bill's complete current
+ * set, so replacement also handles withdrawals-turned-removals); the unnest
+ * JOIN drops rows whose bioguide id the legislators table doesn't know —
+ * FK-safe, with the dropped ids logged, mirroring the votes ingester's
+ * positions JOIN.
+ */
+async function applyCosponsors({ client, billId, data: rows, log }) {
+  await client.query('BEGIN');
+  try {
+    await client.query('DELETE FROM bill_cosponsors WHERE bill_id = $1', [billId]);
+    if (rows.length > 0) {
+      const { rowCount } = await client.query(
+        `INSERT INTO bill_cosponsors (bill_id, bioguide_id, original_cosponsor, sponsored_at, withdrawn_at)
+         SELECT $1, l.bioguide_id, v.original_cosponsor, v.sponsored_at, v.withdrawn_at
+         FROM unnest($2::text[], $3::boolean[], $4::date[], $5::date[])
+           AS v(bioguide_id, original_cosponsor, sponsored_at, withdrawn_at)
+         JOIN legislators l ON l.bioguide_id = v.bioguide_id
+         ON CONFLICT (bill_id, bioguide_id) DO NOTHING`,
+        [
+          billId,
+          rows.map((r) => r.bioguide_id),
+          rows.map((r) => r.original_cosponsor),
+          rows.map((r) => r.sponsored_at),
+          rows.map((r) => r.withdrawn_at),
+        ],
+      );
+      const skipped = rows.length - rowCount;
+      if (skipped > 0) {
+        const { rows: unknown } = await client.query(
+          `SELECT v.bioguide_id FROM unnest($1::text[]) AS v(bioguide_id)
+           WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.bioguide_id = v.bioguide_id)`,
+          [rows.map((r) => r.bioguide_id)],
+        );
+        log(
+          `${billId}: ${skipped} cosponsor(s) skipped — unknown bioguide_id: ` +
+          `${unknown.map((r) => r.bioguide_id).join(', ')}`,
+        );
+      }
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  }
+}
+
+export async function loadStaleCosponsorRaws({ client, loadCursor, batchSize = 500, log = console.error }) {
+  return loadStaleEndpointRaws({
+    client,
+    endpoint: COSPONSORS_ENDPOINT,
+    loadCursor,
+    batchSize,
+    log,
+    transformRaw: transformCosponsors,
+    apply: applyCosponsors,
+  });
+}
+
+/**
+ * Replace one bill's subject terms. Same replacement pattern as cosponsors;
+ * no legislators JOIN needed, and ON CONFLICT DO NOTHING guards against a
+ * pathological payload repeating a term (the transform already dedupes).
+ */
+async function applySubjects({ client, billId, data: subjects }) {
+  await client.query('BEGIN');
+  try {
+    await client.query('DELETE FROM bill_subjects WHERE bill_id = $1', [billId]);
+    if (subjects.length > 0) {
+      await client.query(
+        `INSERT INTO bill_subjects (bill_id, subject)
+         SELECT $1, v.subject FROM unnest($2::text[]) AS v(subject)
+         ON CONFLICT (bill_id, subject) DO NOTHING`,
+        [billId, subjects],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  }
+}
+
+export async function loadStaleSubjectRaws({ client, loadCursor, batchSize = 500, log = console.error }) {
+  return loadStaleEndpointRaws({
+    client,
+    endpoint: SUBJECTS_ENDPOINT,
+    loadCursor,
+    batchSize,
+    log,
+    transformRaw: transformSubjects,
+    apply: applySubjects,
+  });
+}
+
+/**
+ * Replace one bill's summary versions. The payload carries every version's
+ * full text, so replacement keeps the table exactly in step with the source.
+ */
+async function applySummaries({ client, billId, data: rows }) {
+  await client.query('BEGIN');
+  try {
+    await client.query('DELETE FROM bill_summaries WHERE bill_id = $1', [billId]);
+    if (rows.length > 0) {
+      await client.query(
+        `INSERT INTO bill_summaries (bill_id, version_code, action_desc, action_date, summary_text, source_updated_at)
+         SELECT $1, v.version_code, v.action_desc, v.action_date, v.summary_text, v.source_updated_at
+         FROM unnest($2::text[], $3::text[], $4::date[], $5::text[], $6::timestamptz[])
+           AS v(version_code, action_desc, action_date, summary_text, source_updated_at)
+         ON CONFLICT (bill_id, version_code) DO NOTHING`,
+        [
+          billId,
+          rows.map((r) => r.version_code),
+          rows.map((r) => r.action_desc),
+          rows.map((r) => r.action_date),
+          rows.map((r) => r.summary_text),
+          rows.map((r) => r.source_updated_at),
+        ],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  }
+}
+
+export async function loadStaleSummaryRaws({ client, loadCursor, batchSize = 500, log = console.error }) {
+  return loadStaleEndpointRaws({
+    client,
+    endpoint: SUMMARIES_ENDPOINT,
+    loadCursor,
+    batchSize,
+    log,
+    transformRaw: transformSummaries,
+    apply: applySummaries,
+  });
+}
+
+/**
+ * Enrich the bills row from the detail payload. Every column COALESCEs onto
+ * its current value: the endpoint omitting a field must never NULL a
+ * populated column. A sponsor whose bioguide id the legislators table
+ * doesn't know is dropped to NULL (FK-safe) with a log line naming it.
+ */
+async function applyDetail({ client, billId, data, log }) {
+  let sponsor = data.sponsor_bioguide_id;
+  if (sponsor !== null) {
+    const { rowCount } = await client.query('SELECT 1 FROM legislators WHERE bioguide_id = $1', [sponsor]);
+    if (rowCount === 0) {
+      log(`${billId}: sponsor skipped — unknown bioguide_id: ${sponsor}`);
+      sponsor = null;
+    }
+  }
+  await client.query(
+    `UPDATE bills SET
+       sponsor_bioguide_id = COALESCE($2, sponsor_bioguide_id),
+       introduced_at       = COALESCE($3, introduced_at),
+       policy_area         = COALESCE($4, policy_area),
+       enacted_as_law_type = COALESCE($5, enacted_as_law_type),
+       enacted_as_number   = COALESCE($6, enacted_as_number),
+       updated_at          = now()
+     WHERE bill_id = $1`,
+    [billId, sponsor, data.introduced_at, data.policy_area, data.enacted_as_law_type, data.enacted_as_number],
+  );
+}
+
+export async function loadStaleDetailRaws({ client, loadCursor, batchSize = 500, log = console.error }) {
+  return loadStaleEndpointRaws({
+    client,
+    endpoint: DETAIL_ENDPOINT,
+    loadCursor,
+    batchSize,
+    log,
+    transformRaw: transformDetail,
+    apply: applyDetail,
+  });
+}
+
+/**
+ * Enrich the bills title columns from the titles payload — the current
+ * (most recently updated) title per family, COALESCEd like the detail
+ * enrichment so an absent family never NULLs a populated column.
+ */
+async function applyTitles({ client, billId, data }) {
+  await client.query(
+    `UPDATE bills SET
+       official_title = COALESCE($2, official_title),
+       short_title    = COALESCE($3, short_title),
+       popular_title  = COALESCE($4, popular_title),
+       updated_at     = now()
+     WHERE bill_id = $1`,
+    [billId, data.official_title, data.short_title, data.popular_title],
+  );
+}
+
+export async function loadStaleTitleRaws({ client, loadCursor, batchSize = 500, log = console.error }) {
+  return loadStaleEndpointRaws({
+    client,
+    endpoint: TITLES_ENDPOINT,
+    loadCursor,
+    batchSize,
+    log,
+    transformRaw: transformTitles,
+    apply: applyTitles,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Task 0011: per-bill sub-entity transforms. Each consumes the payload shape
+// the fan-out stores in raw_payloads for its endpoint (see the endpoint
+// descriptors above the fan-out) and, like `transform`, never fabricates a
+// value the endpoint did not carry — enrichment columns the API omits map to
+// null so the load side can leave existing values untouched (COALESCE).
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a bill detail payload (the response's `bill` object) to the bills
+ * columns the list endpoint cannot populate. `laws` lists the slip-law
+ * citations for an enacted bill; the first entry is the enacted-as citation.
+ */
+export function transformDetail(bill) {
+  const law = bill.laws?.[0] ?? null;
+  return {
+    sponsor_bioguide_id: bill.sponsors?.[0]?.bioguideId ?? null,
+    introduced_at: bill.introducedDate ?? null,
+    policy_area: bill.policyArea?.name ?? null,
+    enacted_as_law_type: law?.type ?? null,
+    enacted_as_number: law?.number ?? null,
+  };
+}
+
+/**
+ * Map a cosponsors payload to bill_cosponsors rows. Entries without a
+ * bioguideId cannot key a row and are dropped here; entries whose bioguideId
+ * is unknown to the legislators table are dropped FK-safely at load time
+ * (with a logged count), mirroring the votes ingester's positions JOIN.
+ */
+export function transformCosponsors(payload) {
+  const rows = [];
+  for (const item of payload.cosponsors ?? []) {
+    if (item.bioguideId == null) continue;
+    rows.push({
+      bioguide_id: item.bioguideId,
+      original_cosponsor: item.isOriginalCosponsor === true,
+      sponsored_at: item.sponsorshipDate ?? null,
+      withdrawn_at: item.sponsorshipWithdrawnDate ?? null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Map a subjects payload (the merged `subjects` object: legislativeSubjects
+ * plus policyArea) to a deduplicated list of subject terms for bill_subjects.
+ * The policy area is NOT included — it lives on bills.policy_area, populated
+ * from the detail endpoint.
+ */
+export function transformSubjects(subjects) {
+  const seen = new Set();
+  for (const item of subjects.legislativeSubjects ?? []) {
+    if (item.name != null) seen.add(item.name);
+  }
+  return [...seen];
+}
+
+/**
+ * Map a summaries payload to bill_summaries rows, one per summary version.
+ * Entries without a versionCode cannot key a row and are dropped; a repeated
+ * versionCode keeps the latest updateDate (UNIQUE bill_id/version_code).
+ */
+export function transformSummaries(payload) {
+  const byVersion = new Map();
+  for (const item of payload.summaries ?? []) {
+    if (item.versionCode == null) continue;
+    const existing = byVersion.get(item.versionCode);
+    if (existing && (existing.source_updated_at ?? '') > (item.updateDate ?? '')) continue;
+    byVersion.set(item.versionCode, {
+      version_code: item.versionCode,
+      action_desc: item.actionDesc ?? null,
+      action_date: item.actionDate ?? null,
+      summary_text: item.text ?? null,
+      source_updated_at: item.updateDate ?? null,
+    });
+  }
+  return [...byVersion.values()];
+}
+
+// Title-type matchers for the /titles endpoint. Congress.gov titleType values
+// are prose ("Official Title as Introduced", "Short Title(s) as Passed
+// House", "Popular Title") with per-version variants; the current title per
+// family is the one with the latest updateDate. "Display Title" matches none
+// of these on purpose — it feeds bills.title via the list endpoint.
+const TITLE_FAMILIES = [
+  ['official_title', /official title/i],
+  ['short_title', /short title/i],
+  ['popular_title', /popular title/i],
+];
+
+/**
+ * Map a titles payload to the bills official/short/popular title columns:
+ * the most recently updated title of each family, null when the family is
+ * absent. Lexical ISO-string comparison, like the fetch cursor.
+ */
+export function transformTitles(payload) {
+  const result = { official_title: null, short_title: null, popular_title: null };
+  const latest = { official_title: null, short_title: null, popular_title: null };
+  for (const item of payload.titles ?? []) {
+    const family = TITLE_FAMILIES.find(([, re]) => re.test(item.titleType ?? ''))?.[0];
+    if (!family || item.title == null) continue;
+    const updated = item.updateDate ?? '';
+    if (latest[family] === null || updated > latest[family]) {
+      latest[family] = updated;
+      result[family] = item.title;
+    }
+  }
+  return result;
+}
+
 export function transform(item) {
   const type = String(item.type ?? '').toLowerCase();
   if (!BILL_TYPES.has(type)) {

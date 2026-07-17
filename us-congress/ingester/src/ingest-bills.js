@@ -4,19 +4,35 @@
  * Load stage for the `congress-bills` source: transforms raw_payloads rows
  * fetched past the load cursor into bills upserts (ON CONFLICT (bill_id)
  * DO UPDATE — enriching the vote-stub rows, preserving the `hr3590-111`
- * natural-key format so vote cross-references keep resolving).
+ * natural-key format so vote cross-references keep resolving), and — since
+ * task 0011 — the five per-bill endpoints: cosponsors/subjects/summaries
+ * replace their child rows per bill, detail/titles enrich the bills row via
+ * COALESCE (never overwriting a populated column with NULL). The bill-list
+ * loader runs first so sub-entity rows always find their bills row.
  *
  * Stage gate: raw_payloads is an owned table, so per the plan's gating rule
  * readiness is a staleness comparison on fetched_at — not the file-source
- * fetch↔load cursor handshake. The load cursor advances to the max consumed
- * fetched_at in the same transaction that marks the run successful.
+ * fetch↔load cursor handshake. One load cursor spans all six endpoints; it
+ * advances to the max consumed fetched_at in the same transaction that marks
+ * the run successful. Each loader consumes its endpoint's whole backlog past
+ * the cursor, so the shared advance strands nothing.
  */
 
 import { pool } from './db.js';
 import { logger } from './logger.js';
 import { readCursor, advanceLoadCursor } from './cursor-state.js';
 import { openRun, succeedRun, failRun } from './run-log.js';
-import { SOURCE_NAME, capWatermark, rawReadiness, loadStaleRawsIntoBills } from './connectors/congress-bills.js';
+import {
+  SOURCE_NAME,
+  capWatermark,
+  rawReadiness,
+  loadStaleCosponsorRaws,
+  loadStaleDetailRaws,
+  loadStaleRawsIntoBills,
+  loadStaleSubjectRaws,
+  loadStaleSummaryRaws,
+  loadStaleTitleRaws,
+} from './connectors/congress-bills.js';
 
 async function run() {
   const client = await pool.connect();
@@ -58,11 +74,30 @@ async function run() {
     );
     const graceCap = capRows[0].cap;
 
-    const { ingested, failed, maxFetchedAt: consumed } = await loadStaleRawsIntoBills({
-      client,
-      loadCursor,
-      log: logger.error,
-    });
+    // Bills first — sub-entity loaders skip raws whose bills row is missing,
+    // so the list loader must land the rows before they look.
+    const bills = await loadStaleRawsIntoBills({ client, loadCursor, log: logger.error });
+
+    const subLoaders = [
+      ['cosponsors', loadStaleCosponsorRaws],
+      ['subjects', loadStaleSubjectRaws],
+      ['summaries', loadStaleSummaryRaws],
+      ['detail', loadStaleDetailRaws],
+      ['titles', loadStaleTitleRaws],
+    ];
+    const subResults = {};
+    let consumed = bills.maxFetchedAt;
+    let processed = bills.ingested;
+    let failed = bills.failed;
+    for (const [name, loader] of subLoaders) {
+      const result = await loader({ client, loadCursor, log: (m) => logger.warn(m) });
+      subResults[name] = result;
+      processed += result.processed;
+      failed += result.failed;
+      if (consumed === null || (result.maxFetchedAt !== null && result.maxFetchedAt > consumed)) {
+        consumed = result.maxFetchedAt;
+      }
+    }
 
     // Advance the load cursor to the (capped) consumed watermark and mark the
     // run successful atomically — the cursor and run status can never disagree.
@@ -70,15 +105,21 @@ async function run() {
     await client.query('BEGIN');
     try {
       if (advanceTo !== null) await advanceLoadCursor(client, SOURCE_NAME, advanceTo);
-      await succeedRun(client, runId, ingested);
+      await succeedRun(client, runId, processed, {
+        bills: bills.ingested,
+        ...Object.fromEntries(Object.entries(subResults).map(([name, r]) => [name, r.processed])),
+      });
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
     }
 
+    const subSummary = Object.entries(subResults)
+      .map(([name, r]) => `${name}: ${r.processed}${r.skippedMissingBill > 0 ? ` (${r.skippedMissingBill} skipped, no bills row)` : ''}`)
+      .join(', ');
     logger.info(
-      `Bills load complete — ingested: ${ingested}, failed: ${failed}, cursor: ${advanceTo}` +
+      `Bills load complete — bills: ${bills.ingested}, ${subSummary}, failed: ${failed}, cursor: ${advanceTo}` +
       (advanceTo !== consumed ? ` (grace-capped from ${consumed}; the tail re-reads next run)` : ''),
     );
 

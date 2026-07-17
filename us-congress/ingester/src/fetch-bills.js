@@ -15,19 +15,31 @@
  * new — only then does `fetch_verified` advance. Offset-pagination boundary
  * skips therefore can't strand a bill behind the cursors, even across crashes.
  *
+ * Since task 0011 the fetch also fans out per changed bill: five per-bill
+ * endpoints (detail, cosponsors, subjects, summaries, titles) land in
+ * raw_payloads inside the same chunk transaction as the bill's list row, so
+ * an interrupted fan-out resumes without re-fetching completed bills. A
+ * per-run request budget keeps the whole run under the api.data.gov hourly
+ * rate limit: when it runs out the run bails cleanly mid-walk (cursor
+ * committed, verification deferred) and the next cron tick resumes — the
+ * initial ~90k-request backfill drip-feeds over ~a day this way.
+ *
  * Config: CONGRESS_GOV_API_KEY (required — without it the run is a loud,
- * clean skip so the cron never crashes) and CONGRESS_GOV_TARGET_CONGRESS
- * (the backfill-depth knob, default 119).
+ * clean skip so the cron never crashes), CONGRESS_GOV_TARGET_CONGRESS
+ * (the backfill-depth knob, default 119), and
+ * CONGRESS_GOV_HOURLY_REQUEST_BUDGET (default 4000 — headroom under the
+ * 5,000/hour api.data.gov limit for pagination overrun; see requestBudget).
  */
 
 import { pool } from './db.js';
 import { logger } from './logger.js';
 import { readCursor } from './cursor-state.js';
 import { openRun, succeedRun, failRun } from './run-log.js';
-import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, toFromDateTime } from './connectors/congress-bills.js';
+import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, requestBudget, toFromDateTime } from './connectors/congress-bills.js';
 
 const API_KEY = process.env.CONGRESS_GOV_API_KEY;
 const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS ?? '119', 10);
+const HOURLY_REQUEST_BUDGET = Number.parseInt(process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000', 10);
 
 async function run() {
   if (!API_KEY) {
@@ -64,10 +76,13 @@ async function run() {
     const fromDateTime = toFromDateTime(await readCursor(client, fetchStateName(TARGET_CONGRESS), 'fetch'));
     runId = await openRun(client, 'bills_fetch', { congress: TARGET_CONGRESS, fromDateTime });
 
+    const budget = requestBudget(HOURLY_REQUEST_BUDGET);
     const { passes, pages, upserted, unchanged, cursor, verified } = await fetchPagesUntilClean({
       client,
       congress: TARGET_CONGRESS,
       apiKey: API_KEY,
+      fanout: {},
+      budget,
       log: (msg) => logger.warn(msg),
       onPage: (p) =>
         logger.info(
@@ -76,16 +91,22 @@ async function run() {
         ),
     });
 
-    // The fetch cursor already advanced per committed page; closing the run is
-    // bookkeeping only, so it needs no shared transaction with the cursor.
-    // `upserted` is the distinct-key count across passes. The verification
-    // outcome is recorded on the run row so a wedged fetch (every run giving
-    // up unverified) is queryable in ingestion_runs, not just a log line.
-    await succeedRun(client, runId, upserted, { verified, passes });
+    // The fetch cursor already advanced per committed chunk; closing the run
+    // is bookkeeping only, so it needs no shared transaction with the cursor.
+    // `upserted` is the distinct-key count across passes. The verification and
+    // budget outcomes are recorded on the run row so a wedged fetch (every run
+    // giving up unverified) is queryable in ingestion_runs, not just a log line.
+    await succeedRun(client, runId, upserted, {
+      verified,
+      passes,
+      requests: budget.used,
+      budgetExhausted: budget.exhausted,
+    });
     const summary =
       `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes} ` +
       `(${verified ? 'verified' : 'NOT verified — next run re-walks'}), pages: ${pages}, ` +
-      `upserted: ${upserted}, unchanged: ${unchanged}, cursor: ${cursor ?? 'none'}`;
+      `upserted: ${upserted}, unchanged: ${unchanged}, requests: ${budget.used}` +
+      `${budget.exhausted ? ' (budget exhausted — resuming next tick)' : ''}, cursor: ${cursor ?? 'none'}`;
     if (verified) logger.info(summary);
     else logger.warn(summary);
 

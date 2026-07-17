@@ -123,9 +123,12 @@ services:
       # Optional dead-man's-switch URL for the separate build-aggregates job.
       - HEALTHCHECK_VOTE_AGGREGATES_URL
       # Congress.gov API ingestion (bills). Without the key, the bills fetch
-      # cron is a loud, clean skip. Target congress is the backfill-depth knob.
+      # cron is a loud, clean skip. Target congress is the backfill-depth knob;
+      # the request budget keeps each hourly run (list pages + per-bill
+      # fan-out) under the api.data.gov rate limit (default 4000).
       - CONGRESS_GOV_API_KEY
       - CONGRESS_GOV_TARGET_CONGRESS
+      - CONGRESS_GOV_HOURLY_REQUEST_BUDGET
       - HEALTHCHECK_BILLS_FETCH_URL
       - HEALTHCHECK_BILLS_INGEST_URL
       # Cap the V8 heap — the ingester is mostly idle so 64 MB is ample.

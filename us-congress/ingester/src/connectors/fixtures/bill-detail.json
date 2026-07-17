@@ -1,0 +1,55 @@
+{
+  "bill": {
+    "congress": 119,
+    "type": "HR",
+    "number": "1234",
+    "originChamber": "House",
+    "originChamberCode": "H",
+    "introducedDate": "2025-01-03",
+    "policyArea": {
+      "name": "Taxation"
+    },
+    "sponsors": [
+      {
+        "bioguideId": "A000370",
+        "district": 12,
+        "firstName": "Alma",
+        "fullName": "Rep. Adams, Alma S. [D-NC-12]",
+        "isByRequest": "N",
+        "lastName": "Adams",
+        "party": "D",
+        "state": "NC",
+        "url": "https://api.congress.gov/v3/member/A000370?format=json"
+      }
+    ],
+    "laws": [
+      {
+        "number": "119-21",
+        "type": "Public Law"
+      }
+    ],
+    "latestAction": {
+      "actionDate": "2025-04-01",
+      "text": "Referred to the Committee on Ways and Means."
+    },
+    "title": "Example Tax Relief Act of 2025",
+    "updateDate": "2025-04-02",
+    "updateDateIncludingText": "2025-04-02T07:15:31Z",
+    "cosponsors": {
+      "count": 2,
+      "countIncludingWithdrawnCosponsors": 2,
+      "url": "https://api.congress.gov/v3/bill/119/hr/1234/cosponsors?format=json"
+    },
+    "subjects": {
+      "count": 2,
+      "url": "https://api.congress.gov/v3/bill/119/hr/1234/subjects?format=json"
+    }
+  },
+  "request": {
+    "billNumber": "1234",
+    "billType": "hr",
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "summaries": [
+    {
+      "actionDate": "2025-01-03",
+      "actionDesc": "Introduced in House",
+      "text": "<p><strong>Example Tax Relief Act of 2025</strong></p> <p>This bill provides example tax relief for small businesses.</p>",
+      "updateDate": "2025-01-10T14:00:00Z",
+      "versionCode": "00"
+    },
+    {
+      "actionDate": "2025-03-05",
+      "actionDesc": "Reported to House",
+      "text": "<p><strong>Example Tax Relief Act of 2025</strong></p> <p>This bill, as reported, provides example tax relief for small businesses and farms.</p>",
+      "updateDate": "2025-03-12T09:30:00Z",
+      "versionCode": "07"
+    }
+  ],
+  "pagination": {
+    "count": 2
+  },
+  "request": {
+    "billNumber": "1234",
+    "billType": "hr",
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  }
+}

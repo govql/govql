@@ -35,6 +35,14 @@ import them; import the connector module instead.
   is guarded by `payload IS DISTINCT FROM EXCLUDED.payload`, so an unchanged payload
   does not touch `fetched_at` — which is what keeps a nothing-new rerun a cheap no-op
   end to end.
+- **Per-entity fan-out endpoints** (bills: `bill-detail`, `bill-cosponsors`,
+  `bill-subjects`, `bill-summaries`, `bill-titles` beside `bill-list`): each extra
+  endpoint is its own `endpoint` tag under the **same natural key**, fetched only for
+  entities whose list payload changed (the diff guard doubles as the change detector)
+  and stored as the entity's **complete current set** — paginated endpoints are merged
+  before the write, never stored page by page. An entity's list row and its fan-out
+  rows commit **in one transaction**: landing the list row without its fan-out would
+  make the resumed run see the entity as unchanged and skip its sub-entities forever.
 
 ## Watermarks and gating
 
@@ -69,6 +77,16 @@ Staged cursors live in `source_state` (see the master plan's "Staged cursors" an
   on the source and skip loudly if another run holds it. `fetched_at` is
   transaction-start `now()`, so overlapping fetch runs could commit rows behind an
   already-advanced load cursor.
+- **Request budget (rate limiting)** — API fetch runs carry a per-run request budget
+  (`requestBudget`; bills: `CONGRESS_GOV_HOURLY_REQUEST_BUDGET`, default 4000 against
+  api.data.gov's 5,000/hour). The chosen strategy is **bail out cleanly, resume next
+  tick** — not throttling: every list page and fan-out request spends from the budget,
+  and when a check is refused the run stops **before the next entity**, commits what
+  finished, and returns unverified so the next cron tick resumes from the committed
+  cursors (a long backfill drip-feeds across hourly runs this way). Two invariants:
+  a started entity always completes (its pagination follows may overrun the cap — the
+  default leaves headroom), and the budget check happens **before** an entity's list
+  upsert, never between it and its fan-out.
 - **Grace-capped load advance** — for the same reason, the load never advances its
   cursor into the last few minutes (`capWatermark`): an in-flight fetch page
   transaction gets time to land, and the clamped tail is simply re-read next run.
@@ -88,7 +106,9 @@ Postgres microsecond timestamps"); read them with `readCursor` and compare as st
 | --- | --- | --- |
 | `readCursor` / `advanceFetchCursor` / `advanceLoadCursor` / `loadReadiness` | [`src/cursor-state.js`](src/cursor-state.js) | Precision-preserving `source_state` reads/writes and the file-source handshake predicate. |
 | `openRun` / `succeedRun` / `failRun` | [`src/run-log.js`](src/run-log.js) | The `ingestion_runs` lifecycle every stage records. |
-| chunked per-page commit | `fetchPagesIntoRaw` in the bills connector | The per-page BEGIN → raw upserts → cursor advance → COMMIT loop; generalize it out of the bills connector when the second API source arrives, rather than speculatively now. |
+| chunked commit + fan-out | `fetchPagesIntoRaw` in the bills connector | The per-chunk BEGIN → list raw upserts → per-entity fan-out → cursor advance → COMMIT loop; generalize it out of the bills connector when the second API source arrives, rather than speculatively now. |
+| `requestBudget` | bills connector | The per-run request counter behind the bail-out-cleanly rate strategy above. |
+| stale-raw keyset batches | `staleRawBatches` (internal) + `loadStaleEndpointRaws` in the bills connector | The cursor-bounded, tuple-keyset read loop every endpoint loader shares (extracted when the 0011 sub-entity loaders became its second consumer), plus the transform/apply runner with the missing-parent skip guard. |
 
 ## Adding a source, end to end
 

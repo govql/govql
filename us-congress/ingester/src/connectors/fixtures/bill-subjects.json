@@ -1,0 +1,31 @@
+{
+  "subjects": {
+    "legislativeSubjects": [
+      {
+        "name": "Income tax deductions",
+        "updateDate": "2025-02-14T16:30:11Z"
+      },
+      {
+        "name": "Small business",
+        "updateDate": "2025-02-14T16:30:11Z"
+      },
+      {
+        "name": "Income tax deductions",
+        "updateDate": "2025-02-14T16:30:11Z"
+      }
+    ],
+    "policyArea": {
+      "name": "Taxation"
+    }
+  },
+  "pagination": {
+    "count": 3
+  },
+  "request": {
+    "billNumber": "1234",
+    "billType": "hr",
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  }
+}

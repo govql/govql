@@ -91,42 +91,52 @@ export const nodes = [
     stage: 'fetch',
     domain: 'bills',
     upstream: [],
-    reads: ['external:Congress.gov API v3 bill-list endpoint (api.congress.gov)'],
+    reads: [
+      'external:Congress.gov API v3 bill-list endpoint (api.congress.gov)',
+      'external:Congress.gov API v3 per-bill endpoints — detail, cosponsors, subjects, summaries, titles (fan-out per changed bill)',
+    ],
     writes: ['table:raw_payloads', 'table:source_state', 'table:ingestion_runs'],
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '5 * * * *', match: 'src/fetch-bills.js' },
       readiness:
-        'loud clean skip when CONGRESS_GOV_API_KEY is unset or another fetch run holds the pg advisory lock; otherwise a catch-up pass from the fetch cursor (NULL = backfill), then verification re-walks from the fetch_verified cursor until a pass writes nothing new (offset-pagination skip-proofing, crash-safe)',
+        'loud clean skip when CONGRESS_GOV_API_KEY is unset or another fetch run holds the pg advisory lock; otherwise a catch-up pass from the fetch cursor (NULL = backfill), then verification re-walks from the fetch_verified cursor until a pass writes nothing new (offset-pagination skip-proofing, crash-safe); a per-run request budget (CONGRESS_GOV_HOURLY_REQUEST_BUDGET, default 4000) bails the run out cleanly under the api.data.gov hourly rate limit — the next tick resumes',
     },
     watermark: {
       table: 'source_state',
       key: "source_name='congress-bills-<congress>', stages 'fetch' (resume) + 'fetch_verified' (verified-through), per target congress",
       advances:
-        "'fetch' to the max consumed updateDate per committed page (monotonic; crash resumes from the last committed page); 'fetch_verified' only after a clean verification pass",
+        "'fetch' to the max consumed updateDate per committed chunk — each chunk commits its bills' list rows AND their five per-bill endpoint payloads atomically, so a resumed run re-fetches no completed bill; 'fetch_verified' only after a clean verification pass",
     },
     idempotency:
-      'raw_payloads ON CONFLICT (source_name, natural_key, endpoint) DO UPDATE, guarded by payload IS DISTINCT FROM so unchanged bills do not touch fetched_at',
+      'raw_payloads ON CONFLICT (source_name, natural_key, endpoint) DO UPDATE, guarded by payload IS DISTINCT FROM so unchanged bills do not touch fetched_at — and, unchanged, do not fan out',
   },
   {
     id: 'ingest-bills',
     stage: 'load',
     domain: 'bills',
     upstream: ['fetch-bills'],
-    reads: ['table:raw_payloads', 'table:source_state'],
-    writes: ['table:bills', 'table:ingestion_runs', 'table:source_state'],
+    reads: ['table:raw_payloads', 'table:source_state', 'table:legislators'],
+    writes: [
+      'table:bills',
+      'table:bill_cosponsors',
+      'table:bill_subjects',
+      'table:bill_summaries',
+      'table:ingestion_runs',
+      'table:source_state',
+    ],
     trigger: {
       cron: { file: 'ingester/ingest_cron', schedule: '20 * * * *', match: 'src/ingest-bills.js' },
       readiness:
-        "skip if another load run holds the pg advisory lock; otherwise staleness gate on the owned raw_payloads table: runs iff max(fetched_at) > load.cursor (or load.cursor unset), for 'congress-bills' (rawReadiness)",
+        "skip if another load run holds the pg advisory lock; otherwise staleness gate on the owned raw_payloads table: runs iff max(fetched_at) > load.cursor (or load.cursor unset), source-wide across all six 'congress-bills' endpoints (rawReadiness)",
     },
     watermark: {
       table: 'source_state',
-      key: "source_name='congress-bills', stage='load'",
+      key: "source_name='congress-bills', stage='load' (one cursor spans all six endpoints; each loader consumes its endpoint's whole backlog past it)",
       advances:
         'to the max consumed raw_payloads.fetched_at — grace-capped a few minutes before the run so in-flight fetch transactions can land — atomically with the ingestion_runs success row',
     },
     idempotency:
-      'bills ON CONFLICT (bill_id) DO UPDATE (enriches vote-stub rows; identity columns never change)',
+      'bills ON CONFLICT (bill_id) DO UPDATE (enriches vote-stub rows; identity columns never change); detail/titles enrichment COALESCEs per column (never NULLs a populated value); cosponsors/subjects/summaries are replaced per bill (DELETE + re-INSERT in one transaction), with unknown bioguide ids dropped FK-safely via the legislators JOIN',
   },
   {
     id: 'scrape-legislators',

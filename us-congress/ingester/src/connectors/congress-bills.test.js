@@ -9,15 +9,621 @@ import {
   fetchPagesUntilClean,
   fetchStateName,
   listPages,
+  loadStaleCosponsorRaws,
   loadStaleRawsIntoBills,
+  loadStaleDetailRaws,
+  loadStaleSubjectRaws,
+  loadStaleSummaryRaws,
+  loadStaleTitleRaws,
   rawReadiness,
+  requestBudget,
   toFromDateTime,
   transform,
+  transformCosponsors,
+  transformDetail,
+  transformSubjects,
+  transformSummaries,
+  transformTitles,
 } from './congress-bills.js';
 
 const fixture = JSON.parse(
   readFileSync(fileURLToPath(new URL('./fixtures/bill-list-page.json', import.meta.url)), 'utf8'),
 );
+
+function loadFixture(name) {
+  return JSON.parse(readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), 'utf8'));
+}
+
+// ---------------------------------------------------------------------------
+// Task 0011: per-bill sub-entity transforms (detail, titles, cosponsors,
+// subjects, summaries). Each consumes the payload shape the fan-out stores in
+// raw_payloads for its endpoint.
+// ---------------------------------------------------------------------------
+
+test('transformDetail maps the bill detail payload to the bills enrichment columns', () => {
+  const detail = loadFixture('bill-detail.json');
+  assert.deepEqual(transformDetail(detail.bill), {
+    sponsor_bioguide_id: 'A000370',
+    introduced_at: '2025-01-03',
+    policy_area: 'Taxation',
+    enacted_as_law_type: 'Public Law',
+    enacted_as_number: '119-21',
+  });
+});
+
+test('transformTitles picks the most recent title per type and ignores other title types', () => {
+  const titles = loadFixture('bill-titles.json');
+  assert.deepEqual(transformTitles(titles), {
+    // Two short titles in the fixture; "as Passed House" has the later
+    // updateDate and wins. "Display Title" is neither official/short/popular
+    // (it feeds bills.title via the list endpoint) and must not leak in.
+    official_title: 'To amend the Internal Revenue Code of 1986 to provide example tax relief.',
+    short_title: 'Example Tax Relief Act',
+    popular_title: 'Tax Relief Act',
+  });
+});
+
+test('transformTitles maps missing title types to null', () => {
+  const onlyOfficial = {
+    titles: [{ title: 'An official title.', titleType: 'Official Title as Introduced', updateDate: '2025-01-03T00:00:00Z' }],
+  };
+  assert.deepEqual(transformTitles(onlyOfficial), {
+    official_title: 'An official title.',
+    short_title: null,
+    popular_title: null,
+  });
+  assert.deepEqual(transformTitles({}), { official_title: null, short_title: null, popular_title: null });
+});
+
+test('transformCosponsors maps cosponsor entries to bill_cosponsors rows', () => {
+  const cosponsors = loadFixture('bill-cosponsors.json');
+  assert.deepEqual(transformCosponsors(cosponsors), [
+    { bioguide_id: 'B001316', original_cosponsor: true, sponsored_at: '2025-01-03', withdrawn_at: null },
+    { bioguide_id: 'C001132', original_cosponsor: false, sponsored_at: '2025-02-10', withdrawn_at: '2025-03-01' },
+  ]);
+});
+
+test('transformCosponsors drops entries without a bioguideId and returns [] for an empty payload', () => {
+  assert.deepEqual(
+    transformCosponsors({ cosponsors: [{ fullName: 'No id', sponsorshipDate: '2025-01-03' }] }),
+    [],
+  );
+  assert.deepEqual(transformCosponsors({}), []);
+});
+
+test('transformSubjects maps legislative subjects to a deduplicated term list', () => {
+  const subjects = loadFixture('bill-subjects.json');
+  // The fixture repeats "Income tax deductions" — the UNIQUE(bill_id, subject)
+  // constraint means duplicates must be gone before the load.
+  assert.deepEqual(transformSubjects(subjects.subjects), ['Income tax deductions', 'Small business']);
+  assert.deepEqual(transformSubjects({}), []);
+});
+
+test('transformSummaries maps summary versions to bill_summaries rows, deduplicated by version keeping the latest', () => {
+  const summaries = loadFixture('bill-summaries.json');
+  assert.deepEqual(transformSummaries(summaries), [
+    {
+      version_code: '00',
+      action_desc: 'Introduced in House',
+      action_date: '2025-01-03',
+      summary_text: '<p><strong>Example Tax Relief Act of 2025</strong></p> <p>This bill provides example tax relief for small businesses.</p>',
+      source_updated_at: '2025-01-10T14:00:00Z',
+    },
+    {
+      version_code: '07',
+      action_desc: 'Reported to House',
+      action_date: '2025-03-05',
+      summary_text: '<p><strong>Example Tax Relief Act of 2025</strong></p> <p>This bill, as reported, provides example tax relief for small businesses and farms.</p>',
+      source_updated_at: '2025-03-12T09:30:00Z',
+    },
+  ]);
+  // Same versionCode twice → the later updateDate wins (UNIQUE bill_id/version).
+  const dup = transformSummaries({
+    summaries: [
+      { versionCode: '00', text: 'old', updateDate: '2025-01-01T00:00:00Z' },
+      { versionCode: '00', text: 'new', updateDate: '2025-02-01T00:00:00Z' },
+    ],
+  });
+  assert.equal(dup.length, 1);
+  assert.equal(dup[0].summary_text, 'new');
+  // No versionCode → no natural key → dropped.
+  assert.deepEqual(transformSummaries({ summaries: [{ text: 'x' }] }), []);
+});
+
+test('requestBudget tracks spent requests and reports exhaustion at a refused check', () => {
+  const budget = requestBudget(3);
+  assert.equal(budget.has(1), true);
+  budget.take(1);            // list page
+  assert.equal(budget.has(2), true);
+  budget.take(2);            // two more requests
+  assert.equal(budget.used, 3);
+  assert.equal(budget.exhausted, false);   // fully spent but never refused
+  assert.equal(budget.has(1), false);      // the refusal marks exhaustion
+  assert.equal(budget.exhausted, true);
+  // No limit → never exhausts.
+  const unlimited = requestBudget();
+  unlimited.take(1_000_000);
+  assert.equal(unlimited.has(1_000_000), true);
+  assert.equal(unlimited.exhausted, false);
+});
+
+// Routed fetch stub for fan-out tests: dispatches on URL pathname (the list
+// endpoint plus the five per-bill endpoints), recording every request.
+function routedFetch(routes) {
+  const urls = [];
+  const fetchImpl = (url, opts) => {
+    urls.push({ url, opts });
+    const { pathname, searchParams } = new URL(url);
+    const body = routes(pathname, searchParams, url);
+    if (!body) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+  };
+  return { urls, fetchImpl };
+}
+
+const detailFixture = loadFixture('bill-detail.json');
+const cosponsorsFixture = loadFixture('bill-cosponsors.json');
+const subjectsFixture = loadFixture('bill-subjects.json');
+const summariesFixture = loadFixture('bill-summaries.json');
+const titlesFixture = loadFixture('bill-titles.json');
+
+// Serves the hr1234-119 sub-endpoints from the recorded fixtures.
+function billSubEndpointRoutes(pathname) {
+  const routes = {
+    '/v3/bill/119/hr/1234': detailFixture,
+    '/v3/bill/119/hr/1234/cosponsors': cosponsorsFixture,
+    '/v3/bill/119/hr/1234/subjects': subjectsFixture,
+    '/v3/bill/119/hr/1234/summaries': summariesFixture,
+    '/v3/bill/119/hr/1234/titles': titlesFixture,
+  };
+  return routes[pathname] ?? null;
+}
+
+test('fetchPagesIntoRaw fan-out: a changed bill lands all five per-bill endpoints in the same chunk transaction; an unchanged bill fetches nothing', async () => {
+  const page = { bills: [fixture.bills[0], fixture.bills[1]], pagination: { count: 2 } };
+  const { urls, fetchImpl } = routedFetch((pathname) =>
+    pathname === '/v3/bill/119' ? page : billSubEndpointRoutes(pathname));
+
+  // hr1234-119's list payload changed (rowCount 1); sres22-119's did not
+  // (rowCount 0) — only the changed bill fans out.
+  const client = stubClient((text, params) => {
+    if (/INSERT INTO raw_payloads/i.test(text) && params[2] === 'bill-list') {
+      return { rows: [], rowCount: params[1] === 'hr1234-119' ? 1 : 0 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await fetchPagesIntoRaw({ client, congress: 119, apiKey: 'k', fetchImpl, fanout: {} });
+  assert.equal(result.upserted, 1);
+  assert.equal(result.unchanged, 1);
+  assert.equal(result.complete, true);
+
+  // 1 list page + 5 sub-endpoints for the one changed bill.
+  assert.equal(urls.length, 6);
+  const subUrls = urls.slice(1).map((u) => new URL(u.url));
+  assert.deepEqual(subUrls.map((u) => u.pathname), [
+    '/v3/bill/119/hr/1234',
+    '/v3/bill/119/hr/1234/cosponsors',
+    '/v3/bill/119/hr/1234/subjects',
+    '/v3/bill/119/hr/1234/summaries',
+    '/v3/bill/119/hr/1234/titles',
+  ]);
+  for (const [i, u] of subUrls.entries()) {
+    assert.equal(u.searchParams.get('format'), 'json');
+    assert.equal(u.searchParams.has('api_key'), false);          // header, never URL
+    assert.deepEqual(urls[i + 1].opts, { headers: { 'X-Api-Key': 'k' } });
+  }
+
+  // All raw writes — list + five sub-endpoints — commit atomically with the
+  // cursor advance: an interrupt rolls back the whole bill, so a resumed run
+  // sees its list payload as changed and fans out again.
+  const shape = client.calls.map((c) =>
+    c.text === 'BEGIN' || c.text === 'COMMIT' ? c.text
+    : /INSERT INTO raw_payloads/i.test(c.text) ? `raw:${c.params[2]}`
+    : /INSERT INTO source_state/i.test(c.text) ? 'cursor'
+    : 'other');
+  assert.deepEqual(shape, [
+    'BEGIN',
+    'raw:bill-list',
+    'raw:bill-detail', 'raw:bill-cosponsors', 'raw:bill-subjects', 'raw:bill-summaries', 'raw:bill-titles',
+    'raw:bill-list',
+    'cursor',
+    'COMMIT',
+  ]);
+
+  // Sub-endpoint payloads are stored in their merged shape under the bill's
+  // natural key: detail unwraps `bill`; subjects keeps legislativeSubjects
+  // plus policyArea; the collection endpoints wrap their item arrays.
+  const rawByEndpoint = Object.fromEntries(
+    client.calls.filter((c) => /INSERT INTO raw_payloads/i.test(c.text) && c.params[2] !== 'bill-list')
+      .map((c) => [c.params[2], c]));
+  for (const call of Object.values(rawByEndpoint)) assert.equal(call.params[1], 'hr1234-119');
+  assert.deepEqual(JSON.parse(rawByEndpoint['bill-detail'].params[3]), detailFixture.bill);
+  assert.deepEqual(JSON.parse(rawByEndpoint['bill-cosponsors'].params[3]), { cosponsors: cosponsorsFixture.cosponsors });
+  assert.deepEqual(JSON.parse(rawByEndpoint['bill-subjects'].params[3]), {
+    legislativeSubjects: subjectsFixture.subjects.legislativeSubjects,
+    policyArea: subjectsFixture.subjects.policyArea,
+  });
+  assert.deepEqual(JSON.parse(rawByEndpoint['bill-summaries'].params[3]), { summaries: summariesFixture.summaries });
+  assert.deepEqual(JSON.parse(rawByEndpoint['bill-titles'].params[3]), { titles: titlesFixture.titles });
+});
+
+test('fetchPagesIntoRaw fan-out: an exhausted budget stops cleanly before the next bill, keeping completed bills committed', async () => {
+  const page = { bills: [fixture.bills[0], fixture.bills[1]], pagination: { count: 2 } };
+  const { urls, fetchImpl } = routedFetch((pathname) =>
+    pathname === '/v3/bill/119' ? page : billSubEndpointRoutes(pathname));
+  const client = stubClient();
+
+  // 1 list page + 5 fan-out requests = 6; the second bill's check (6 + 5 > 7)
+  // is refused, so the run bails BEFORE touching its list row — landing it
+  // without its fan-out would hide it from the resumed run.
+  const budget = requestBudget(7);
+  const result = await fetchPagesIntoRaw({ client, congress: 119, apiKey: 'k', fetchImpl, fanout: {}, budget });
+
+  assert.equal(result.upserted, 1);
+  assert.equal(result.unchanged, 0);
+  assert.equal(result.complete, false);          // truncated — verification stays owed
+  assert.equal(result.cursor, '2025-04-02');     // advanced only through the completed bill
+  assert.equal(budget.used, 6);
+  assert.equal(urls.length, 6);
+
+  // The partial chunk still committed: one COMMIT, no ROLLBACK, and the
+  // cursor write carries the completed bill's updateDate.
+  const texts = client.calls.map((c) => c.text);
+  assert.equal(texts.filter((t) => t === 'COMMIT').length, 1);
+  assert.equal(texts.filter((t) => t === 'ROLLBACK').length, 0);
+  const cursorWrite = client.calls.find((c) => /INSERT INTO source_state/i.test(c.text));
+  assert.deepEqual(cursorWrite.params, ['congress-bills-119', '2025-04-02']);
+  // The second bill's list row was never written.
+  const listKeys = client.calls
+    .filter((c) => /INSERT INTO raw_payloads/i.test(c.text) && c.params[2] === 'bill-list')
+    .map((c) => c.params[1]);
+  assert.deepEqual(listKeys, ['hr1234-119']);
+});
+
+test('fetchPagesUntilClean: an exhausted budget skips verification and leaves the verified cursor for the next run', async () => {
+  const page = { bills: [fixture.bills[0], fixture.bills[1]], pagination: { count: 2 } };
+  const { fetchImpl } = routedFetch((pathname) =>
+    pathname === '/v3/bill/119' ? page : billSubEndpointRoutes(pathname));
+  const client = cursorAwareClient({ resume: null, verified: null });
+
+  const warnings = [];
+  const budget = requestBudget(7);
+  const result = await fetchPagesUntilClean({
+    client, congress: 119, apiKey: 'k', fetchImpl, fanout: {}, budget,
+    log: (m) => warnings.push(m),
+  });
+
+  // No verification passes burned against an empty budget: one truncated
+  // catch-up pass, verified untouched, and the run says so.
+  assert.equal(result.passes, 1);
+  assert.equal(result.verified, false);
+  assert.equal(verifiedWrites(client).length, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /budget/i);
+});
+
+test('fetchPagesIntoRaw fan-out: an interrupt mid-fan-out rolls back only that chunk, and the resumed run re-fetches no completed bill', async () => {
+  const page = { bills: [fixture.bills[0], fixture.bills[1]], pagination: { count: 2 } };
+  // sres22-119's sub-endpoints, for the resumed run.
+  const sres22Routes = (pathname) => {
+    if (pathname.startsWith('/v3/bill/119/sres/22')) return billSubEndpointRoutes(pathname.replace('/sres/22', '/hr/1234'));
+    return null;
+  };
+
+  // Run 1: hr1234-119's chunk commits; sres22-119's cosponsors fetch dies.
+  const run1 = routedFetch((pathname) => {
+    if (pathname === '/v3/bill/119') return page;
+    if (pathname === '/v3/bill/119/sres/22/cosponsors') return null; // 404 → throw
+    if (pathname.startsWith('/v3/bill/119/sres/22')) return sres22Routes(pathname);
+    return billSubEndpointRoutes(pathname);
+  });
+  const client1 = stubClient();
+  await assert.rejects(
+    () => fetchPagesIntoRaw({ client: client1, congress: 119, apiKey: 'k', fetchImpl: run1.fetchImpl, fanout: { chunkSize: 1 } }),
+    /bill-cosponsors request failed with HTTP 404/,
+  );
+  const texts1 = client1.calls.map((c) => c.text);
+  assert.equal(texts1.filter((t) => t === 'COMMIT').length, 1);   // hr1234's chunk landed
+  assert.equal(texts1.filter((t) => t === 'ROLLBACK').length, 1); // sres22's chunk rolled back whole
+
+  // Run 2 (resume): hr1234's list payload is unchanged → no fan-out for it;
+  // sres22 is still "changed" (its chunk rolled back) → fans out now.
+  const run2 = routedFetch((pathname) => {
+    if (pathname === '/v3/bill/119') return page;
+    if (pathname.startsWith('/v3/bill/119/sres/22')) return sres22Routes(pathname);
+    return null; // hr1234 sub-endpoints must NOT be hit again
+  });
+  const client2 = stubClient((text, params) => {
+    if (/INSERT INTO raw_payloads/i.test(text) && params[2] === 'bill-list') {
+      return { rows: [], rowCount: params[1] === 'sres22-119' ? 1 : 0 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+  const result = await fetchPagesIntoRaw({ client: client2, congress: 119, apiKey: 'k', fetchImpl: run2.fetchImpl, fanout: { chunkSize: 1 } });
+
+  assert.equal(result.upserted, 1);
+  assert.equal(result.unchanged, 1);
+  assert.equal(result.complete, true);
+  const subPaths = run2.urls.slice(1).map((u) => new URL(u.url).pathname);
+  assert.deepEqual(subPaths, [
+    '/v3/bill/119/sres/22',
+    '/v3/bill/119/sres/22/cosponsors',
+    '/v3/bill/119/sres/22/subjects',
+    '/v3/bill/119/sres/22/summaries',
+    '/v3/bill/119/sres/22/titles',
+  ]);
+});
+
+test('fetchPagesIntoRaw fan-out: a paginated sub-endpoint is merged into one complete payload, each page charged to the budget', async () => {
+  const page = { bills: [fixture.bills[0]], pagination: { count: 1 } };
+  const cosponsorsPageTwo = {
+    cosponsors: [{ bioguideId: 'D000096', isOriginalCosponsor: false, sponsorshipDate: '2025-03-15' }],
+    pagination: { count: 3 },
+  };
+  const cosponsorsPageOne = {
+    cosponsors: cosponsorsFixture.cosponsors,
+    pagination: { count: 3, next: 'https://api.congress.gov/v3/bill/119/hr/1234/cosponsors?offset=2&format=json' },
+  };
+  const { urls, fetchImpl } = routedFetch((pathname, searchParams) => {
+    if (pathname === '/v3/bill/119') return page;
+    if (pathname === '/v3/bill/119/hr/1234/cosponsors') {
+      return searchParams.get('offset') === '2' ? cosponsorsPageTwo : cosponsorsPageOne;
+    }
+    return billSubEndpointRoutes(pathname);
+  });
+  const client = stubClient();
+  const budget = requestBudget(1000);
+
+  await fetchPagesIntoRaw({ client, congress: 119, apiKey: 'k', fetchImpl, fanout: {}, budget });
+
+  // 1 list + 6 fan-out (cosponsors took two pages).
+  assert.equal(urls.length, 7);
+  assert.equal(budget.used, 7);
+  const cosponsorsRaw = client.calls.find((c) =>
+    /INSERT INTO raw_payloads/i.test(c.text) && c.params[2] === 'bill-cosponsors');
+  assert.deepEqual(JSON.parse(cosponsorsRaw.params[3]), {
+    cosponsors: [...cosponsorsFixture.cosponsors, ...cosponsorsPageTwo.cosponsors],
+  });
+});
+
+test('fetchPagesIntoRaw fan-out: a malformed list item lands raw but skips fan-out instead of 404ing the run forever', async () => {
+  const malformed = { ...fixture.bills[0], type: 'AMDT' }; // no valid per-bill URL
+  const page = { bills: [malformed], pagination: { count: 1 } };
+  const { urls, fetchImpl } = routedFetch((pathname) => (pathname === '/v3/bill/119' ? page : null));
+  const client = stubClient();
+
+  const warnings = [];
+  const result = await fetchPagesIntoRaw({
+    client, congress: 119, apiKey: 'k', fetchImpl, fanout: {}, log: (m) => warnings.push(m),
+  });
+
+  assert.equal(result.upserted, 1);       // raw storage stays lenient
+  assert.equal(result.fanoutSkipped, 1);  // but no garbage per-bill URL is fetched
+  assert.equal(urls.length, 1);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /amdt1234-119/);
+});
+
+// ---------------------------------------------------------------------------
+// Task 0011: sub-entity load stage. Each loader consumes its endpoint's stale
+// raws in the same cursor-gated keyset-batch pattern as the bills load.
+// ---------------------------------------------------------------------------
+
+test('loadStaleCosponsorRaws replaces a bill\'s cosponsors, dropping unknown bioguide ids FK-safely with a logged count', async () => {
+  const staleRow = {
+    natural_key: 'hr1234-119',
+    payload: { cosponsors: cosponsorsFixture.cosponsors },
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM bills/i.test(text)) return { rows: [{}], rowCount: 1 };
+    // The unnest JOIN inserts only the known bioguide id (1 of 2).
+    if (/INSERT INTO bill_cosponsors/i.test(text)) return { rows: [], rowCount: 1 };
+    if (/NOT EXISTS/i.test(text)) return { rows: [{ bioguide_id: 'C001132' }], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const warnings = [];
+  const result = await loadStaleCosponsorRaws({
+    client,
+    loadCursor: '2026-07-16T09:00:00.000000Z',
+    log: (m) => warnings.push(m),
+  });
+  assert.deepEqual(result, {
+    processed: 1,
+    failed: 0,
+    skippedMissingBill: 0,
+    maxFetchedAt: '2026-07-16T09:30:00.000001Z',
+  });
+
+  // The stale-raw read targets this endpoint's rows past the load cursor.
+  const read = client.calls[0];
+  assert.deepEqual(read.params.slice(0, 3), ['congress-bills', 'bill-cosponsors', '2026-07-16T09:00:00.000000Z']);
+
+  // Replace-per-bill inside a transaction: DELETE then unnest JOIN INSERT —
+  // the JOIN drops unknown bioguide ids instead of violating the FK.
+  const texts = client.calls.map((c) => c.text);
+  const del = client.calls.find((c) => /DELETE FROM bill_cosponsors/i.test(c.text));
+  assert.deepEqual(del.params, ['hr1234-119']);
+  const insert = client.calls.find((c) => /INSERT INTO bill_cosponsors/i.test(c.text));
+  assert.match(insert.text, /JOIN legislators l ON l\.bioguide_id = v\.bioguide_id/i);
+  assert.deepEqual(insert.params, [
+    'hr1234-119',
+    ['B001316', 'C001132'],
+    [true, false],
+    ['2025-01-03', '2025-02-10'],
+    [null, '2025-03-01'],
+  ]);
+  assert.ok(texts.indexOf('BEGIN') < texts.indexOf(del.text));
+  assert.ok(texts.indexOf(insert.text) < texts.indexOf('COMMIT'));
+
+  // The dropped id is named in the log, like the votes ingester's positions JOIN.
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /hr1234-119/);
+  assert.match(warnings[0], /C001132/);
+});
+
+test('loadStaleCosponsorRaws skips (and counts) a raw whose bills row does not exist instead of violating the FK', async () => {
+  const staleRow = {
+    natural_key: 'hr99999-119',
+    payload: { cosponsors: cosponsorsFixture.cosponsors },
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM bills/i.test(text)) return { rows: [], rowCount: 0 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await loadStaleCosponsorRaws({ client, loadCursor: null, log: () => {} });
+  assert.equal(result.processed, 0);
+  assert.equal(result.skippedMissingBill, 1);
+  assert.equal(client.calls.some((c) => /DELETE FROM bill_cosponsors/i.test(c.text)), false);
+});
+
+test('loadStaleSubjectRaws replaces a bill\'s subject terms per bill', async () => {
+  const staleRow = {
+    natural_key: 'hr1234-119',
+    payload: { legislativeSubjects: subjectsFixture.subjects.legislativeSubjects, policyArea: subjectsFixture.subjects.policyArea },
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM bills/i.test(text)) return { rows: [{}], rowCount: 1 };
+    return { rows: [], rowCount: 2 };
+  });
+
+  const result = await loadStaleSubjectRaws({ client, loadCursor: null, log: () => {} });
+  assert.deepEqual(result, { processed: 1, failed: 0, skippedMissingBill: 0, maxFetchedAt: '2026-07-16T09:30:00.000001Z' });
+
+  assert.equal(client.calls[0].params[1], 'bill-subjects');
+  const del = client.calls.find((c) => /DELETE FROM bill_subjects/i.test(c.text));
+  assert.deepEqual(del.params, ['hr1234-119']);
+  const insert = client.calls.find((c) => /INSERT INTO bill_subjects/i.test(c.text));
+  // The transform already deduplicated the fixture's repeated term.
+  assert.deepEqual(insert.params, ['hr1234-119', ['Income tax deductions', 'Small business']]);
+});
+
+test('loadStaleSummaryRaws replaces a bill\'s summaries per bill', async () => {
+  const staleRow = {
+    natural_key: 'hr1234-119',
+    payload: { summaries: summariesFixture.summaries },
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM bills/i.test(text)) return { rows: [{}], rowCount: 1 };
+    return { rows: [], rowCount: 2 };
+  });
+
+  const result = await loadStaleSummaryRaws({ client, loadCursor: null, log: () => {} });
+  assert.deepEqual(result, { processed: 1, failed: 0, skippedMissingBill: 0, maxFetchedAt: '2026-07-16T09:30:00.000001Z' });
+
+  assert.equal(client.calls[0].params[1], 'bill-summaries');
+  const del = client.calls.find((c) => /DELETE FROM bill_summaries/i.test(c.text));
+  assert.deepEqual(del.params, ['hr1234-119']);
+  const insert = client.calls.find((c) => /INSERT INTO bill_summaries/i.test(c.text));
+  assert.deepEqual(insert.params, [
+    'hr1234-119',
+    ['00', '07'],
+    ['Introduced in House', 'Reported to House'],
+    ['2025-01-03', '2025-03-05'],
+    [summariesFixture.summaries[0].text, summariesFixture.summaries[1].text],
+    ['2025-01-10T14:00:00Z', '2025-03-12T09:30:00Z'],
+  ]);
+});
+
+test('loadStaleDetailRaws enriches the bills row via COALESCE — a populated column is never overwritten with NULL', async () => {
+  const staleRow = {
+    natural_key: 'hr1234-119',
+    payload: detailFixture.bill,
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM (bills|legislators)/i.test(text)) return { rows: [{}], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await loadStaleDetailRaws({ client, loadCursor: null, log: () => {} });
+  assert.deepEqual(result, { processed: 1, failed: 0, skippedMissingBill: 0, maxFetchedAt: '2026-07-16T09:30:00.000001Z' });
+
+  assert.equal(client.calls[0].params[1], 'bill-detail');
+  const update = client.calls.find((c) => /UPDATE bills/i.test(c.text));
+  // Every enrichment column falls back to its current value when the
+  // endpoint omitted the field — the no-NULL-overwrite rule.
+  assert.match(update.text, /sponsor_bioguide_id = COALESCE\(\$2, sponsor_bioguide_id\)/i);
+  assert.match(update.text, /introduced_at\s+= COALESCE\(\$3, introduced_at\)/i);
+  assert.match(update.text, /policy_area\s+= COALESCE\(\$4, policy_area\)/i);
+  assert.match(update.text, /enacted_as_law_type = COALESCE\(\$5, enacted_as_law_type\)/i);
+  assert.match(update.text, /enacted_as_number\s+= COALESCE\(\$6, enacted_as_number\)/i);
+  assert.deepEqual(update.params, ['hr1234-119', 'A000370', '2025-01-03', 'Taxation', 'Public Law', '119-21']);
+});
+
+test('loadStaleDetailRaws NULLs an unknown sponsor bioguide id FK-safely, with a logged count', async () => {
+  const staleRow = {
+    natural_key: 'hr1234-119',
+    payload: detailFixture.bill,
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM bills/i.test(text)) return { rows: [{}], rowCount: 1 };
+    if (/SELECT 1 FROM legislators/i.test(text)) return { rows: [], rowCount: 0 }; // unknown sponsor
+    return { rows: [], rowCount: 1 };
+  });
+
+  const warnings = [];
+  const result = await loadStaleDetailRaws({ client, loadCursor: null, log: (m) => warnings.push(m) });
+  assert.equal(result.processed, 1);
+
+  const update = client.calls.find((c) => /UPDATE bills/i.test(c.text));
+  assert.equal(update.params[1], null);                 // sponsor dropped, not FK-violated
+  assert.equal(update.params[2], '2025-01-03');         // the rest still applied
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /hr1234-119/);
+  assert.match(warnings[0], /A000370/);
+});
+
+test('loadStaleTitleRaws enriches the title columns via COALESCE from the titles payload', async () => {
+  const staleRow = {
+    natural_key: 'hr1234-119',
+    payload: { titles: titlesFixture.titles },
+    fetched_at: '2026-07-16T09:30:00.000001Z',
+  };
+  const client = stubClient((text) => {
+    if (/FROM raw_payloads/i.test(text)) return { rows: [staleRow], rowCount: 1 };
+    if (/SELECT 1 FROM bills/i.test(text)) return { rows: [{}], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await loadStaleTitleRaws({ client, loadCursor: null, log: () => {} });
+  assert.deepEqual(result, { processed: 1, failed: 0, skippedMissingBill: 0, maxFetchedAt: '2026-07-16T09:30:00.000001Z' });
+
+  assert.equal(client.calls[0].params[1], 'bill-titles');
+  const update = client.calls.find((c) => /UPDATE bills/i.test(c.text));
+  assert.match(update.text, /official_title = COALESCE\(\$2, official_title\)/i);
+  assert.match(update.text, /short_title\s+= COALESCE\(\$3, short_title\)/i);
+  assert.match(update.text, /popular_title\s+= COALESCE\(\$4, popular_title\)/i);
+  assert.deepEqual(update.params, [
+    'hr1234-119',
+    'To amend the Internal Revenue Code of 1986 to provide example tax relief.',
+    'Example Tax Relief Act',
+    'Tax Relief Act',
+  ]);
+});
+
+test('transformDetail maps fields the endpoint omits to null (never fabricated)', () => {
+  assert.deepEqual(transformDetail({ congress: 119, type: 'HR', number: '9' }), {
+    sponsor_bioguide_id: null,
+    introduced_at: null,
+    policy_area: null,
+    enacted_as_law_type: null,
+    enacted_as_number: null,
+  });
+});
 
 test('transform rejects an item whose type cannot satisfy the bills.bill_type constraint', () => {
   assert.throws(
@@ -396,12 +1002,15 @@ test('rawReadiness gates the load on raw_payloads staleness, not the fetch↔loa
   const maxFetched = '2026-07-15T10:00:00.123456Z';
   const respond = () => ({ rows: [{ max_fetched_at: maxFetched }], rowCount: 1 });
 
-  // Something fetched past the load cursor → ready.
+  // Something fetched past the load cursor → ready. Source-wide, not
+  // per-endpoint: since task 0011 the load consumes six endpoints under one
+  // cursor, so freshness on ANY of them must trigger the run.
   let client = stubClient(respond);
   let r = await rawReadiness(client, '2026-07-15T09:00:00.000000Z');
   assert.deepEqual(r, { maxFetchedAt: maxFetched, ready: true });
   assert.match(client.calls[0].text, /max\(fetched_at\)/i);
-  assert.deepEqual(client.calls[0].params, ['congress-bills', 'bill-list']);
+  assert.equal(/endpoint/i.test(client.calls[0].text), false);
+  assert.deepEqual(client.calls[0].params, ['congress-bills']);
 
   // Load already caught up → skip.
   r = await rawReadiness(stubClient(respond), maxFetched);

@@ -1,0 +1,40 @@
+{
+  "cosponsors": [
+    {
+      "bioguideId": "B001316",
+      "district": 8,
+      "firstName": "Nanette",
+      "fullName": "Rep. Barragan, Nanette Diaz [D-CA-44]",
+      "isOriginalCosponsor": true,
+      "lastName": "Barragan",
+      "party": "D",
+      "sponsorshipDate": "2025-01-03",
+      "state": "CA",
+      "url": "https://api.congress.gov/v3/member/B001316?format=json"
+    },
+    {
+      "bioguideId": "C001132",
+      "district": 3,
+      "firstName": "Kat",
+      "fullName": "Rep. Cammack, Kat [R-FL-3]",
+      "isOriginalCosponsor": false,
+      "lastName": "Cammack",
+      "party": "R",
+      "sponsorshipDate": "2025-02-10",
+      "sponsorshipWithdrawnDate": "2025-03-01",
+      "state": "FL",
+      "url": "https://api.congress.gov/v3/member/C001132?format=json"
+    }
+  ],
+  "pagination": {
+    "count": 2,
+    "countIncludingWithdrawnCosponsors": 2
+  },
+  "request": {
+    "billNumber": "1234",
+    "billType": "hr",
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  }
+}
