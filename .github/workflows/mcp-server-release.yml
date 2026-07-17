@@ -50,9 +50,12 @@ jobs:
             exit 1
           fi
 
+      # No Python input: uv resolves mcp-server/.python-version itself at run
+      # time (via the job's working-directory). setup-uv has no
+      # `python-version-file` input — passing one was an ignored no-op that
+      # warned on every run.
       - uses: astral-sh/setup-uv@v7
         with:
-          python-version-file: mcp-server/.python-version
           enable-cache: true
 
       - name: Build sdist and wheel
