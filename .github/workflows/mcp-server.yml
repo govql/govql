@@ -30,10 +30,6 @@ jobs:
         working-directory: mcp-server
     steps:
       - uses: actions/checkout@v5
-      # No Python input: uv resolves mcp-server/.python-version itself at run
-      # time (via the job's working-directory). setup-uv has no
-      # `python-version-file` input — passing one was an ignored no-op that
-      # warned on every run.
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true

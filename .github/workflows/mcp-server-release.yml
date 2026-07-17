@@ -33,10 +33,6 @@ jobs:
       - uses: actions/checkout@v5
 
       # The release invariant: tag, pyproject.toml, and CHANGELOG must agree.
-      # Catches the classic drift (version bump forgotten before tagging, or
-      # a missing CHANGELOG entry) before anything is built, let alone
-      # published. tomllib ships with the runner's system Python (3.11+), so
-      # no uv sync is needed for this check.
       - name: Verify tag matches pyproject.toml and CHANGELOG
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#govql-mcp-server-v}"
@@ -50,10 +46,6 @@ jobs:
             exit 1
           fi
 
-      # No Python input: uv resolves mcp-server/.python-version itself at run
-      # time (via the job's working-directory). setup-uv has no
-      # `python-version-file` input — passing one was an ignored no-op that
-      # warned on every run.
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
