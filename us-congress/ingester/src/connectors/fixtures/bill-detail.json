@@ -1,53 +1,77 @@
 {
   "bill": {
-    "congress": 119,
-    "type": "HR",
-    "number": "1234",
-    "originChamber": "House",
-    "originChamberCode": "H",
-    "introducedDate": "2025-01-03",
-    "policyArea": {
-      "name": "Taxation"
+    "actions": {
+      "count": 39,
+      "url": "https://api.congress.gov/v3/bill/119/s/5/actions?format=json"
     },
-    "sponsors": [
-      {
-        "bioguideId": "A000370",
-        "district": 12,
-        "firstName": "Alma",
-        "fullName": "Rep. Adams, Alma S. [D-NC-12]",
-        "isByRequest": "N",
-        "lastName": "Adams",
-        "party": "D",
-        "state": "NC",
-        "url": "https://api.congress.gov/v3/member/A000370?format=json"
-      }
-    ],
+    "amendments": {
+      "count": 94,
+      "url": "https://api.congress.gov/v3/bill/119/s/5/amendments?format=json"
+    },
+    "congress": 119,
+    "cosponsors": {
+      "count": 53,
+      "countIncludingWithdrawnCosponsors": 53,
+      "url": "https://api.congress.gov/v3/bill/119/s/5/cosponsors?format=json"
+    },
+    "introducedDate": "2025-01-06",
+    "latestAction": {
+      "actionDate": "2025-01-29",
+      "text": "Became Public Law No: 119-1."
+    },
     "laws": [
       {
-        "number": "119-21",
+        "number": "119-1",
         "type": "Public Law"
       }
     ],
-    "latestAction": {
-      "actionDate": "2025-04-01",
-      "text": "Referred to the Committee on Ways and Means."
+    "legislationUrl": "https://www.congress.gov/bill/119th-congress/senate-bill/5",
+    "number": "5",
+    "originChamber": "Senate",
+    "originChamberCode": "S",
+    "policyArea": {
+      "name": "Immigration"
     },
-    "title": "Example Tax Relief Act of 2025",
-    "updateDate": "2025-04-02",
-    "updateDateIncludingText": "2025-04-02T07:15:31Z",
-    "cosponsors": {
+    "relatedBills": {
       "count": 2,
-      "countIncludingWithdrawnCosponsors": 2,
-      "url": "https://api.congress.gov/v3/bill/119/hr/1234/cosponsors?format=json"
+      "url": "https://api.congress.gov/v3/bill/119/s/5/relatedbills?format=json"
     },
+    "sponsors": [
+      {
+        "bioguideId": "B001319",
+        "firstName": "Katie",
+        "fullName": "Sen. Britt, Katie Boyd [R-AL]",
+        "isByRequest": "N",
+        "lastName": "Britt",
+        "party": "R",
+        "state": "AL",
+        "url": "https://api.congress.gov/v3/member/B001319?format=json"
+      }
+    ],
     "subjects": {
+      "count": 12,
+      "url": "https://api.congress.gov/v3/bill/119/s/5/subjects?format=json"
+    },
+    "summaries": {
       "count": 2,
-      "url": "https://api.congress.gov/v3/bill/119/hr/1234/subjects?format=json"
-    }
+      "url": "https://api.congress.gov/v3/bill/119/s/5/summaries?format=json"
+    },
+    "textVersions": {
+      "count": 4,
+      "url": "https://api.congress.gov/v3/bill/119/s/5/text?format=json"
+    },
+    "title": "Laken Riley Act",
+    "titles": {
+      "count": 5,
+      "url": "https://api.congress.gov/v3/bill/119/s/5/titles?format=json"
+    },
+    "type": "S",
+    "updateDate": "2026-06-22T13:54:38Z",
+    "updateDateIncludingText": "2026-07-17T19:07:49Z"
   },
   "request": {
-    "billNumber": "1234",
-    "billType": "hr",
+    "billNumber": "5",
+    "billType": "s",
     "congress": "119",
     "contentType": "application/json",
     "format": "json"

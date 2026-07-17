@@ -39,7 +39,7 @@ COMMENT ON TABLE bill_summaries IS 'CRS-authored summaries of a bill, from the C
 COMMENT ON COLUMN bill_summaries.version_code IS 'Congress.gov summary version code, e.g. ''00'' (Introduced).';
 COMMENT ON COLUMN bill_summaries.action_desc IS 'Bill action the summary version corresponds to, e.g. ''Introduced in House''.';
 COMMENT ON COLUMN bill_summaries.action_date IS 'Date of the action the summary version corresponds to.';
-COMMENT ON COLUMN bill_summaries.summary_text IS 'Summary body as HTML, as published by CRS.';
+COMMENT ON COLUMN bill_summaries.summary_text IS 'Summary body as published by CRS — raw upstream HTML, stored and served unsanitized. Consumers MUST sanitize before rendering as HTML.';
 COMMENT ON COLUMN bill_summaries.source_updated_at IS 'When Congress.gov last updated this summary version.';
 
 -- FK reverse lookup: all summaries for a bill.

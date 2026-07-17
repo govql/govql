@@ -1,38 +1,49 @@
 {
   "cosponsors": [
     {
-      "bioguideId": "B001316",
-      "district": 8,
-      "firstName": "Nanette",
-      "fullName": "Rep. Barragan, Nanette Diaz [D-CA-44]",
+      "bioguideId": "R000584",
+      "firstName": "James",
+      "fullName": "Sen. Risch, James E. [R-ID]",
       "isOriginalCosponsor": true,
-      "lastName": "Barragan",
-      "party": "D",
-      "sponsorshipDate": "2025-01-03",
-      "state": "CA",
-      "url": "https://api.congress.gov/v3/member/B001316?format=json"
+      "lastName": "Risch",
+      "middleName": "E.",
+      "party": "R",
+      "sponsorshipDate": "2025-01-06",
+      "state": "ID",
+      "url": "https://api.congress.gov/v3/member/R000584?format=json"
     },
     {
-      "bioguideId": "C001132",
-      "district": 3,
-      "firstName": "Kat",
-      "fullName": "Rep. Cammack, Kat [R-FL-3]",
-      "isOriginalCosponsor": false,
-      "lastName": "Cammack",
+      "bioguideId": "S001227",
+      "firstName": "Eric",
+      "fullName": "Sen. Schmitt, Eric [R-MO]",
+      "isOriginalCosponsor": true,
+      "lastName": "Schmitt",
+      "middleName": "S.",
       "party": "R",
-      "sponsorshipDate": "2025-02-10",
-      "sponsorshipWithdrawnDate": "2025-03-01",
-      "state": "FL",
-      "url": "https://api.congress.gov/v3/member/C001132?format=json"
+      "sponsorshipDate": "2025-01-06",
+      "state": "MO",
+      "url": "https://api.congress.gov/v3/member/S001227?format=json"
+    },
+    {
+      "bioguideId": "L000575",
+      "firstName": "James",
+      "fullName": "Sen. Lankford, James [R-OK]",
+      "isOriginalCosponsor": true,
+      "lastName": "Lankford",
+      "party": "R",
+      "sponsorshipDate": "2025-01-06",
+      "state": "OK",
+      "url": "https://api.congress.gov/v3/member/L000575?format=json"
     }
   ],
   "pagination": {
-    "count": 2,
-    "countIncludingWithdrawnCosponsors": 2
+    "count": 3,
+    "countIncludingWithdrawnCosponsors": 3
   },
   "request": {
-    "billNumber": "1234",
-    "billType": "hr",
+    "billNumber": "5",
+    "billType": "s",
+    "billUrl": "https://api.congress.gov/v3/bill/119/s/5?format=json",
     "congress": "119",
     "contentType": "application/json",
     "format": "json"

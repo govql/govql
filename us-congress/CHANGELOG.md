@@ -32,6 +32,21 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+### Added
+
+- **Bill sub-entities from Congress.gov**: per-bill ingestion now pulls each bill's cosponsors,
+  subjects, and summaries (congress 119 to start). New types and connections: `BillSubject`
+  (`allBillSubjects`, `billSubjectsByBillId` on `Bill`) and `BillSummary` (`allBillSummaries`,
+  `billSummariesByBillId` on `Bill`); the existing `BillCosponsor` type is now populated
+  (`allBillCosponsors`, `billCosponsorsByBillId` on `Bill`, with legislator details via the
+  `bioguideId` relation). Note: `BillSummary.summaryText` is raw upstream HTML as published by
+  CRS, served unsanitized — sanitize before rendering. (#89)
+- **Bill enrichment fields populated**: `Bill.sponsorBioguideId` (with the `legislatorBySponsorBioguideId`
+  relation), `introducedAt`, `policyArea`, `enactedAsLawType`/`enactedAsNumber`, and the
+  `officialTitle`/`shortTitle`/`popularTitle` columns now carry Congress.gov data for covered
+  congresses, filled in over roughly a day as the per-bill backfill drip-feeds within the
+  Congress.gov rate budget. (#89)
+
 ## [2026-07-16]
 
 ### Added

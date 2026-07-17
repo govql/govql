@@ -1,21 +1,21 @@
 ---
 # AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
-sidebar_label: BillSummaries
+sidebar_label: BillSummary
 sidebar_position: 9
 ---
 
-# BillSummaries
+# BillSummary
 
 CRS-authored summaries of a bill, from the Congress.gov /summaries endpoint. One row per bill/summary version (a bill gains a new version as it advances, e.g. Introduced, Reported); the set is replaced wholesale when the bill updates.
 
-**GraphQL type:** `BillSummaries` · **Connection:** `BillSummariessConnection`
+**GraphQL type:** `BillSummary` · **Connection:** `BillSummariesConnection`
 
 ## Queries
 
 | Query | Returns | Description |
 |-------|---------|-------------|
-| `allBillSummariess(filter, orderBy, first, last, before, after)` | `BillSummariessConnection` | Paginated list with filtering and ordering |
-| `billSummariesById(id: BigInt!)` | `BillSummaries` | Look up by primary key |
+| `allBillSummaries(filter, orderBy, first, last, before, after)` | `BillSummariesConnection` | Paginated list with filtering and ordering |
+| `billSummaryById(id: BigInt!)` | `BillSummary` | Look up by primary key |
 
 ## Fields
 
@@ -26,7 +26,7 @@ CRS-authored summaries of a bill, from the Congress.gov /summaries endpoint. One
 | `versionCode` | `String` | Congress.gov summary version code, e.g. ''00'' (Introduced). <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
 | `actionDesc` | `String` | Bill action the summary version corresponds to, e.g. ''Introduced in House''. |
 | `actionDate` | `Date` | Date of the action the summary version corresponds to. |
-| `summaryText` | `String` | Summary body as HTML, as published by CRS. |
+| `summaryText` | `String` | Summary body as published by CRS — raw upstream HTML, stored and served unsanitized. Consumers MUST sanitize before rendering as HTML. |
 | `sourceUpdatedAt` | `Datetime` | When Congress.gov last updated this summary version. |
 
 ## Relationships

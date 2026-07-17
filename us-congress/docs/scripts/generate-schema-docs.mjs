@@ -56,6 +56,8 @@ const TYPE_NAME = {
   committees: 'Committee',
   bills: 'Bill',
   bill_cosponsors: 'BillCosponsor',
+  bill_subjects: 'BillSubject',
+  bill_summaries: 'BillSummary',
   bill_committees: 'BillCommittee',
   committee_memberships: 'CommitteeMembership',
   api_keys: 'ApiKey',
@@ -71,6 +73,8 @@ const CONNECTION_NAME = {
   committees: 'CommitteesConnection',
   bills: 'BillsConnection',
   bill_cosponsors: 'BillCosponsorsConnection',
+  bill_subjects: 'BillSubjectsConnection',
+  bill_summaries: 'BillSummariesConnection',
   bill_committees: 'BillCommitteesConnection',
   committee_memberships: 'CommitteeMembershipsConnection',
 };
@@ -84,6 +88,8 @@ const ALL_QUERY = {
   committees: 'allCommittees',
   bills: 'allBills',
   bill_cosponsors: 'allBillCosponsors',
+  bill_subjects: 'allBillSubjects',
+  bill_summaries: 'allBillSummaries',
   bill_committees: 'allBillCommittees',
   committee_memberships: 'allCommitteeMemberships',
 };
@@ -111,6 +117,8 @@ const FILE_SLUG = {
   bills: 'bills',
   committees: 'committees',
   bill_cosponsors: 'bill-cosponsors',
+  bill_subjects: 'bill-subjects',
+  bill_summaries: 'bill-summaries',
   bill_committees: 'bill-committees',
   committee_memberships: 'committee-memberships',
 };

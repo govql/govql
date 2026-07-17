@@ -135,7 +135,10 @@ export async function* listPages({
     const url = `${baseUrl}/bill/${congress}?${params}`;
     // The key goes in the X-Api-Key header, never the URL: query strings land
     // in proxy/access logs and in error objects that carry the failing URL.
-    const response = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey } });
+    const response = await fetchImpl(url, {
+      headers: { 'X-Api-Key': apiKey },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new Error(`Congress.gov bill list request failed with HTTP ${response.status} (congress ${congress}, offset ${offset})`);
     }
@@ -168,19 +171,6 @@ function naturalKey(item) {
 }
 
 /**
- * Lexical max of the page's updateDate values against the running cursor.
- * ISO-8601 strings compare correctly as strings; no Date round-trip.
- */
-function maxUpdateDate(bills, current) {
-  let max = current;
-  for (const item of bills) {
-    const d = item.updateDate ?? null;
-    if (d !== null && (max === null || d > max)) max = d;
-  }
-  return max;
-}
-
-/**
  * The per-bill API path for the fan-out, or null when the list item cannot
  * form one (unknown type, non-numeric number/congress). Same strictness as
  * `transform`: a malformed item must not produce a garbage URL that 404s the
@@ -193,60 +183,111 @@ function fanoutPath(item) {
   return `/bill/${Number.parseInt(item.congress, 10)}/${type}/${Number.parseInt(item.number, 10)}`;
 }
 
+// Per-request timeout for every Congress.gov call. A stalled response must
+// not hang the run (and, before this timeout existed, could hold a chunk
+// transaction open past the load's grace cap — the fan-out now does all its
+// HTTP before BEGIN, but a wedged cron process is still worth preventing).
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 /**
  * Fetch one per-bill endpoint, following pagination.next for the collection
  * endpoints so the stored payload is the complete current set. Every request
  * (including pagination follows) is charged to the budget; a started bill is
  * never truncated mid-merge, so the overrun past a refused check is bounded
  * by one bill's pagination.
+ *
+ * A 404 is stored as the endpoint's EMPTY payload (`onNotFound` lets the
+ * caller count and log it): Congress.gov persistently 404s some sub-endpoints
+ * for real bills, and throwing would replay the same bill every hour and
+ * wedge the pipeline behind it forever — the same reasoning as the
+ * malformed-item skip in fanoutPath. Every other non-OK status still throws:
+ * transient failures are retried by the next run from the committed cursor.
+ *
+ * pagination.next is response data; it is followed only when it stays on the
+ * configured API origin, because the request carries the API key header and
+ * a hostile/mangled absolute URL must not exfiltrate it (or aim the ingester
+ * at an arbitrary host).
  */
-async function fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget }) {
-  const failed = (status, url) => new Error(
-    `Congress.gov ${descriptor.endpoint} request failed with HTTP ${status} (${url.replace(/\?.*$/, '')})`,
-  );
+async function fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget, onNotFound = () => {} }) {
+  const empty = () => (descriptor.single ? null : descriptor.merge([], null));
+  const request = async (url) => {
+    budget?.take(1);
+    const response = await fetchImpl(url, {
+      headers: { 'X-Api-Key': apiKey },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (response.status === 404) {
+      onNotFound(descriptor.endpoint);
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(
+        `Congress.gov ${descriptor.endpoint} request failed with HTTP ${response.status} (${url.replace(/\?.*$/, '')})`,
+      );
+    }
+    return response.json();
+  };
 
   if (descriptor.single) {
-    const url = `${baseUrl}${path}${descriptor.suffix}?format=json`;
-    budget?.take(1);
-    const response = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey } });
-    if (!response.ok) throw failed(response.status, url);
-    return descriptor.single(await response.json());
+    const page = await request(`${baseUrl}${path}${descriptor.suffix}?format=json`);
+    return page === null ? empty() : descriptor.single(page);
   }
 
   const items = [];
   let firstPage = null;
   let url = `${baseUrl}${path}${descriptor.suffix}?format=json&limit=${limit}`;
   for (;;) {
-    budget?.take(1);
-    const response = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey } });
-    if (!response.ok) throw failed(response.status, url);
-    const page = await response.json();
+    const page = await request(url);
+    if (page === null) return empty();
     firstPage ??= page;
     items.push(...descriptor.items(page));
-    if (!page.pagination?.next) break;
-    url = page.pagination.next;
+    const next = page.pagination?.next;
+    if (!next) break;
+    if (new URL(next).origin !== new URL(baseUrl).origin) {
+      throw new Error(
+        `Congress.gov ${descriptor.endpoint} pagination.next left the API origin — refusing to follow it`,
+      );
+    }
+    url = next;
   }
   return descriptor.merge(items, firstPage);
 }
 
 /**
- * Land all five per-bill endpoints for one changed bill in raw_payloads,
- * inside the caller's open chunk transaction. Same diff-guarded upsert as the
- * list rows: an identical payload leaves fetched_at untouched, so the load
- * side only sees endpoints that actually changed.
+ * Fetch all five per-bill endpoint payloads for one changed bill — pure HTTP,
+ * NO transaction open. The chunk's raw writes happen afterwards, in one short
+ * DB-only transaction: raw_payloads.fetched_at is transaction-start now(),
+ * and holding a transaction open across ~125 serial HTTP requests would let
+ * its rows commit dated behind an already-advanced load cursor (past the
+ * grace cap) and strand them forever.
  */
-async function fetchSubEndpointsIntoRaw({ client, key, path, apiKey, baseUrl, limit, fetchImpl, budget }) {
+async function fetchSubEndpointPayloads({ key, path, apiKey, baseUrl, limit, fetchImpl, budget, log }) {
+  const payloads = [];
+  let notFound = 0;
   for (const descriptor of SUB_ENDPOINTS) {
-    const payload = await fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget });
-    await client.query(
-      `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (source_name, natural_key, endpoint)
-         DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
-         WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
-      [SOURCE_NAME, key, descriptor.endpoint, JSON.stringify(payload)],
-    );
+    const payload = await fetchSubEndpoint({
+      descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget,
+      onNotFound: (endpoint) => {
+        notFound += 1;
+        log(`${key}: ${endpoint} returned HTTP 404 — stored as empty`);
+      },
+    });
+    payloads.push({ endpoint: descriptor.endpoint, payload });
   }
+  return { payloads, notFound };
+}
+
+/** The connector's one raw_payloads upsert: latest payload wins, and the
+ *  diff guard leaves fetched_at untouched when nothing changed. */
+async function upsertRaw(client, key, endpoint, payload) {
+  return client.query(
+    `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (source_name, natural_key, endpoint)
+       DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
+       WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
+    [SOURCE_NAME, key, endpoint, JSON.stringify(payload)],
+  );
 }
 
 // Bills per fan-out chunk transaction. Small enough that one chunk's five
@@ -306,51 +347,81 @@ export async function fetchPagesIntoRaw({
     for (let start = 0; start < bills.length; start += chunkSize) {
       const chunk = bills.slice(start, start + chunkSize);
       let stopped = false;
-      await client.query('BEGIN');
-      try {
-        let chunkMax = cursor;
-        for (const item of chunk) {
-          // Stop BEFORE the bill's list upsert: landing the list row without
-          // its fan-out would hide the bill from the resumed run.
-          if (fanout && budget && !budget.has(FANOUT_REQUESTS_PER_BILL)) {
-            stopped = true;
-            break;
-          }
-          const key = naturalKey(item);
-          const { rowCount } = await client.query(
-            `INSERT INTO raw_payloads (source_name, natural_key, endpoint, payload, fetched_at)
-             VALUES ($1, $2, $3, $4, now())
-             ON CONFLICT (source_name, natural_key, endpoint)
-               DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()
-               WHERE raw_payloads.payload IS DISTINCT FROM EXCLUDED.payload`,
+
+      // Phase 1 — decide and fetch, with NO transaction open. The changed
+      // check is a read-only diff against the stored list payload (the
+      // advisory lock serializes fetch runs, so it cannot race the phase-2
+      // upsert); a changed bill's five endpoints are pulled over HTTP here,
+      // into memory. Keeping the slow part outside the transaction keeps
+      // fetched_at (transaction-start now()) honest — an open transaction
+      // spanning ~125 serial requests could commit rows dated behind an
+      // already-advanced load cursor and strand them forever.
+      const prepared = [];
+      for (const item of chunk) {
+        // Stop BEFORE the bill's changed-check: landing its list row without
+        // its fan-out would hide the bill from the resumed run.
+        if (fanout && budget && !budget.has(FANOUT_REQUESTS_PER_BILL)) {
+          stopped = true;
+          break;
+        }
+        const key = naturalKey(item);
+        let subPayloads = null;
+        if (fanout) {
+          const { rows } = await client.query(
+            `SELECT (payload IS DISTINCT FROM $4::jsonb) AS changed
+             FROM raw_payloads
+             WHERE source_name = $1 AND natural_key = $2 AND endpoint = $3`,
             [SOURCE_NAME, key, LIST_ENDPOINT, JSON.stringify(item)],
           );
-          if (rowCount === 1) {
-            upserted += 1;
-            upsertedKeys?.add(key);
-            if (fanout) {
-              const path = fanoutPath(item);
-              if (path === null) {
-                fanoutSkipped += 1;
-                log(`Skipping sub-entity fan-out for malformed list item ${key} (type/number/congress unusable)`);
-              } else {
-                await fetchSubEndpointsIntoRaw({ client, key, path, apiKey, baseUrl, limit, fetchImpl, budget });
+          const changed = rows.length === 0 || rows[0].changed === true;
+          if (changed) {
+            const path = fanoutPath(item);
+            if (path === null) {
+              fanoutSkipped += 1;
+              log(`Skipping sub-entity fan-out for malformed list item ${key} (type/number/congress unusable)`);
+            } else {
+              const result = await fetchSubEndpointPayloads({ key, path, apiKey, baseUrl, limit, fetchImpl, budget, log });
+              subPayloads = result.payloads;
+            }
+          }
+        }
+        prepared.push({ item, key, subPayloads });
+      }
+
+      // Phase 2 — one short, DB-only transaction: the chunk's list rows,
+      // their fan-out payloads, and the cursor advance commit atomically. A
+      // crash in phase 1 wrote nothing; a crash here rolls the chunk back
+      // whole — either way the resumed run's changed-check re-fans-out
+      // exactly the bills that didn't land.
+      if (prepared.length > 0) {
+        await client.query('BEGIN');
+        try {
+          let chunkMax = cursor;
+          for (const { item, key, subPayloads } of prepared) {
+            const { rowCount } = await upsertRaw(client, key, LIST_ENDPOINT, item);
+            if (rowCount === 1) {
+              upserted += 1;
+              upsertedKeys?.add(key);
+            } else {
+              unchanged += 1;
+            }
+            if (subPayloads !== null) {
+              for (const { endpoint, payload } of subPayloads) {
+                await upsertRaw(client, key, endpoint, payload);
               }
             }
-          } else {
-            unchanged += 1;
+            const d = item.updateDate ?? null;
+            if (d !== null && (chunkMax === null || d > chunkMax)) chunkMax = d;
           }
-          const d = item.updateDate ?? null;
-          if (d !== null && (chunkMax === null || d > chunkMax)) chunkMax = d;
+          if (chunkMax !== null && chunkMax !== cursor) {
+            await advanceFetchCursor(client, fetchStateName(congress), chunkMax);
+            cursor = chunkMax;
+          }
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
         }
-        if (chunkMax !== null && chunkMax !== cursor) {
-          await advanceFetchCursor(client, fetchStateName(congress), chunkMax);
-          cursor = chunkMax;
-        }
-        await client.query('COMMIT');
-      } catch (err) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw err;
       }
       if (stopped) {
         complete = false;
@@ -648,6 +719,15 @@ async function loadStaleEndpointRaws({ client, endpoint, loadCursor, batchSize, 
   let maxFetchedAt = loadCursor;
 
   for await (const rows of staleRawBatches({ client, endpoint, loadCursor, batchSize })) {
+    // One existence probe per batch, not per row: the initial backfill runs
+    // this loop ~17.5k times per endpoint, and a per-row SELECT would be an
+    // N+1 round-trip pattern.
+    const { rows: existing } = await client.query(
+      'SELECT bill_id FROM bills WHERE bill_id = ANY($1::text[])',
+      [rows.map((r) => r.natural_key)],
+    );
+    const knownBills = new Set(existing.map((r) => r.bill_id));
+
     for (const raw of rows) {
       let data = null;
       try {
@@ -657,8 +737,7 @@ async function loadStaleEndpointRaws({ client, endpoint, loadCursor, batchSize, 
         log(`Failed to transform ${endpoint} raw payload ${raw.natural_key}: ${err.message}`);
       }
       if (data !== null) {
-        const { rowCount } = await client.query('SELECT 1 FROM bills WHERE bill_id = $1', [raw.natural_key]);
-        if (rowCount === 0) {
+        if (!knownBills.has(raw.natural_key)) {
           skippedMissingBill += 1;
           log(`Skipping ${endpoint} raw ${raw.natural_key}: no bills row (its list item was rejected)`);
         } else {
@@ -894,8 +973,20 @@ export async function loadStaleTitleRaws({ client, loadCursor, batchSize = 500, 
  * Map a bill detail payload (the response's `bill` object) to the bills
  * columns the list endpoint cannot populate. `laws` lists the slip-law
  * citations for an enacted bill; the first entry is the enacted-as citation.
+ * A null payload — what the fetch stage stores for a 404 or a response
+ * without a `bill` object — maps to all-null enrichment (the COALESCE load
+ * makes that a no-op), never a transform reject.
  */
 export function transformDetail(bill) {
+  if (bill == null) {
+    return {
+      sponsor_bioguide_id: null,
+      introduced_at: null,
+      policy_area: null,
+      enacted_as_law_type: null,
+      enacted_as_number: null,
+    };
+  }
   const law = bill.laws?.[0] ?? null;
   return {
     sponsor_bioguide_id: bill.sponsors?.[0]?.bioguideId ?? null,
@@ -911,19 +1002,23 @@ export function transformDetail(bill) {
  * bioguideId cannot key a row and are dropped here; entries whose bioguideId
  * is unknown to the legislators table are dropped FK-safely at load time
  * (with a logged count), mirroring the votes ingester's positions JOIN.
+ * Repeated bioguideIds are deduplicated here (first entry wins,
+ * deterministically) so the load's skipped count strictly means unknown ids —
+ * a duplicate absorbed by ON CONFLICT would otherwise inflate it and point
+ * the log at nothing.
  */
 export function transformCosponsors(payload) {
-  const rows = [];
+  const byBioguide = new Map();
   for (const item of payload.cosponsors ?? []) {
-    if (item.bioguideId == null) continue;
-    rows.push({
+    if (item.bioguideId == null || byBioguide.has(item.bioguideId)) continue;
+    byBioguide.set(item.bioguideId, {
       bioguide_id: item.bioguideId,
       original_cosponsor: item.isOriginalCosponsor === true,
       sponsored_at: item.sponsorshipDate ?? null,
       withdrawn_at: item.sponsorshipWithdrawnDate ?? null,
     });
   }
-  return rows;
+  return [...byBioguide.values()];
 }
 
 /**
