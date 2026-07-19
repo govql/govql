@@ -40,9 +40,19 @@ import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, requestBudget, toFro
 const API_KEY = process.env.CONGRESS_GOV_API_KEY;
 const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS ?? '119', 10);
 // A malformed value parses to NaN, which would refuse every request; fall
-// back to the default rather than run a dead fetch.
-const parsedBudget = Number.parseInt(process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000', 10);
-const HOURLY_REQUEST_BUDGET = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 4000;
+// back to the default LOUDLY rather than run a dead fetch or spend a budget
+// the operator didn't set. Zero is legitimate — an explicit "pause fetching"
+// knob: the exhausted latch makes such runs report honestly as unverified,
+// zero-request runs rather than dead-but-verified ones.
+const rawBudget = process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000';
+const parsedBudget = Number.parseInt(rawBudget, 10);
+const HOURLY_REQUEST_BUDGET = Number.isFinite(parsedBudget) && parsedBudget >= 0 ? parsedBudget : 4000;
+if (HOURLY_REQUEST_BUDGET !== parsedBudget) {
+  logger.warn(
+    `CONGRESS_GOV_HOURLY_REQUEST_BUDGET=${JSON.stringify(rawBudget)} is not a non-negative integer — ` +
+    `falling back to ${HOURLY_REQUEST_BUDGET}`,
+  );
+}
 
 async function run() {
   if (!API_KEY) {

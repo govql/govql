@@ -117,6 +117,9 @@ test('CI runs the invariant tests and deploy waits on them', () => {
   const runs = testJob.steps.map((s) => s.run ?? '').join('\n');
   assert.match(runs, /us-congress\/deploy/, 'runs the deploy invariant tests');
   assert.match(runs, /us-congress\/ingester/, 'runs the ingester tests');
+  // The pg-integration suite self-skips under plain `npm test`, so only this
+  // explicit step keeps it running anywhere — pin it.
+  assert.match(runs, /test:integration/, 'runs the ingester pg integration suite');
   assert.deepEqual(workflow.jobs.deploy.needs, ['images', 'test'], 'deploy waits on build and tests');
 });
 
