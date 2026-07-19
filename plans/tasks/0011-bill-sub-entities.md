@@ -146,6 +146,14 @@ parked separately in issue #91 — not this task.
   /v3); the pg-integration suite runs in CI (new workflow step); sub-endpoint
   404 counts (fanoutNotFound) surface in the run summary and ingestion_runs
   outcome alongside fanoutSkipped. 100 stub tests + 2 pg tests green.
+- 2026-07-19 (review rounds 4-5, converged): applied the three round-4
+  findings (TCP readiness probe in the integration runner — the socket-only
+  init-phase server could flake the deploy-gating CI job; workflow.test.js
+  pins the test:integration step; budget env fallback warns and allows 0 as
+  an explicit pause) plus the round-5 delta finding (validate the budget env
+  var as a raw digit string — parseInt prefix parsing let '1e3'→1 evade the
+  warn). Round-5 re-check: no open findings. Final: 100 stub + 2 pg
+  integration + 50 deploy invariant tests green, pipeline --check green.
 - Decisions made in-flight (no [decision] items were open): rate strategy =
   clean bail-out (documented); fan-out chunk size 25; one load cursor spans all
   six endpoints (each loader drains its endpoint's backlog, so the shared
