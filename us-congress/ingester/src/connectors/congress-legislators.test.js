@@ -218,3 +218,27 @@ test('load counts an unparseable YAML file as one failure and continues with the
   // The good file was still processed: one full per-record transaction.
   assert.deepEqual(client.calls.map((c) => c.text).filter((t) => t === 'COMMIT'), ['COMMIT']);
 });
+
+test('load counts a YAML file that parses to a non-array (empty, comments-only) as one failure and continues', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'legislators-'));
+  mkdirSync(join(dir, 'data/legislators'), { recursive: true });
+  // Empty file: yaml.load('') returns undefined without throwing — realistic
+  // for a truncated write or failed clone. Must not crash the run.
+  writeFileSync(join(dir, 'data/legislators/legislators-current.yaml'), '');
+  writeFileSync(
+    join(dir, 'data/legislators/legislators-historical.yaml'),
+    ['- id: { bioguide: C000003 }', '  name: { first: Carla, last: Cruz }'].join('\n'),
+  );
+
+  const errors = [];
+  const client = stubClient();
+  const result = await load({
+    client,
+    files: findLegislatorFiles(dir),
+    log: { info: () => {}, warn: () => {}, error: (m) => errors.push(m) },
+  });
+
+  assert.deepEqual(result, { upserted: 1, failed: 1 });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Failed to parse .*legislators-current\.yaml.*array/);
+});

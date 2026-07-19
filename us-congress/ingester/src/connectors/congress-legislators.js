@@ -33,10 +33,20 @@ export function findLegislatorFiles(dataDir) {
     .filter(f => fs.existsSync(f));
 }
 
-/** Parse a raw YAML file and return its array of legislator objects. */
+/**
+ * Parse a raw YAML file and return its array of legislator objects.
+ * Throws on a file that parses to anything else (empty → undefined,
+ * comments-only → null, truncated → mapping/scalar), so every broken-file
+ * shape routes through load's parse-failure path instead of crashing the
+ * per-record loop.
+ */
 export function parseLegislatorFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8');
-  return yaml.load(raw);
+  const data = yaml.load(raw);
+  if (!Array.isArray(data)) {
+    throw new Error('expected a YAML array of legislator records');
+  }
+  return data;
 }
 
 // ---------------------------------------------------------------------------
