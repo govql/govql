@@ -32,6 +32,8 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## [2026-07-19]
+
 ### Added
 
 - **Bill sub-entities from Congress.gov**: per-bill ingestion now pulls each bill's cosponsors,
