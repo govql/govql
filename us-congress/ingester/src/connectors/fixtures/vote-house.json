@@ -1,0 +1,36 @@
+{
+  "vote_id": "h5-119.2025",
+  "chamber": "h",
+  "congress": 119,
+  "session": "2025",
+  "number": 5,
+  "date": "2025-01-03T13:00:00-05:00",
+  "question": "On Passage of the Bill",
+  "type": "On Passage of the Bill",
+  "category": "passage",
+  "result": "Passed",
+  "result_text": "Passed 220-215",
+  "requires": "1/2",
+  "bill": {
+    "bill_id": "hr1-119",
+    "type": "hr",
+    "number": "1",
+    "congress": "119",
+    "title": "An Act to authorize appropriations"
+  },
+  "source_url": "https://clerk.house.gov/Votes/20255",
+  "updated_at": "2025-01-03T18:22:01-05:00",
+  "votes": {
+    "Aye": [
+      { "id": "H001001", "party": "R", "state": "TX", "display_name": "Adams" },
+      { "id": "H001002", "party": "R", "state": "FL", "display_name": "Baker" }
+    ],
+    "No": [
+      { "id": "H001003", "party": "D", "state": "CA", "display_name": "Cruz" }
+    ],
+    "Not Voting": [
+      { "id": "H001004", "party": "D", "state": "NY", "display_name": "Diaz" }
+    ],
+    "Present": []
+  }
+}

@@ -17,6 +17,10 @@
  *  - trigger.readiness is the runtime gate (cron is only a soft schedule);
  *    null means the node is a producer with no gate.
  *  - watermark says where the node's cursor lives and when it advances.
+ *  - module (load-stage nodes only) names the connector module implementing
+ *    the documented contract (CONNECTORS.md); src/connectors/conformance.test.js
+ *    asserts each named module exports that shape, so manifest↔module drift
+ *    fails the suite.
  */
 export const nodes = [
   {
@@ -42,6 +46,7 @@ export const nodes = [
     id: 'ingest-votes',
     stage: 'load',
     domain: 'votes',
+    module: 'src/connectors/congress-votes.js',
     upstream: ['scrape-votes', 'ingest-legislators'],
     reads: [
       'file:data/{congress}/votes/{session}/{chamber}{number}/data.json',
@@ -113,6 +118,7 @@ export const nodes = [
   {
     id: 'ingest-bills',
     stage: 'load',
+    module: 'src/connectors/congress-bills.js',
     domain: 'bills',
     upstream: ['fetch-bills'],
     reads: ['table:raw_payloads', 'table:source_state', 'table:legislators'],
@@ -160,6 +166,7 @@ export const nodes = [
   {
     id: 'ingest-legislators',
     stage: 'load',
+    module: 'src/connectors/congress-legislators.js',
     domain: 'legislators',
     upstream: ['scrape-legislators'],
     reads: [

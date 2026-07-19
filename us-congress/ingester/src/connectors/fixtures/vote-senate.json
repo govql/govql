@@ -1,0 +1,27 @@
+{
+  "vote_id": "s17-119.2025",
+  "chamber": "s",
+  "congress": 119,
+  "session": 2025,
+  "number": 17,
+  "date": "2025-01-23T14:30:00-05:00",
+  "question": "On Cloture on the Motion to Proceed",
+  "type": "On Cloture on the Motion to Proceed",
+  "category": "cloture",
+  "result": "Cloture Motion Agreed to",
+  "requires": "3/5",
+  "source_url": "https://www.senate.gov/legislative/LIS/roll_call_votes/vote1191/vote_119_1_00017.xml",
+  "updated_at": "2025-01-23T20:05:00-05:00",
+  "votes": {
+    "Yea": [
+      { "id": "S901", "party": "R", "state": "KY", "display_name": "McConnell" },
+      { "id": "S902", "party": "D", "state": "NY", "display_name": "Schumer" }
+    ],
+    "Nay": [
+      { "id": "S903", "party": "I", "state": "VT", "display_name": "Sanders" }
+    ],
+    "Not Voting": [
+      { "id": "VP", "display_name": "The Vice President" }
+    ]
+  }
+}

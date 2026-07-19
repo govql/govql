@@ -25,13 +25,8 @@ import { openRun, succeedRun, failRun } from './run-log.js';
 import {
   SOURCE_NAME,
   capWatermark,
+  load,
   rawReadiness,
-  loadStaleCosponsorRaws,
-  loadStaleDetailRaws,
-  loadStaleRawsIntoBills,
-  loadStaleSubjectRaws,
-  loadStaleSummaryRaws,
-  loadStaleTitleRaws,
 } from './connectors/congress-bills.js';
 
 async function run() {
@@ -74,30 +69,11 @@ async function run() {
     );
     const graceCap = capRows[0].cap;
 
-    // Bills first — sub-entity loaders skip raws whose bills row is missing,
-    // so the list loader must land the rows before they look.
-    const bills = await loadStaleRawsIntoBills({ client, loadCursor, log: logger.error });
-
-    const subLoaders = [
-      ['cosponsors', loadStaleCosponsorRaws],
-      ['subjects', loadStaleSubjectRaws],
-      ['summaries', loadStaleSummaryRaws],
-      ['detail', loadStaleDetailRaws],
-      ['titles', loadStaleTitleRaws],
-    ];
-    const subResults = {};
-    let consumed = bills.maxFetchedAt;
-    let processed = bills.ingested;
-    let failed = bills.failed;
-    for (const [name, loader] of subLoaders) {
-      const result = await loader({ client, loadCursor, log: (m) => logger.warn(m) });
-      subResults[name] = result;
-      processed += result.processed;
-      failed += result.failed;
-      if (consumed === null || (result.maxFetchedAt !== null && result.maxFetchedAt > consumed)) {
-        consumed = result.maxFetchedAt;
-      }
-    }
+    const { processed, failed, consumed, bills, subResults } = await load({
+      client,
+      loadCursor,
+      log: logger,
+    });
 
     // Advance the load cursor to the (capped) consumed watermark and mark the
     // run successful atomically — the cursor and run status can never disagree.

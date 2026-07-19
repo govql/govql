@@ -3,24 +3,38 @@
 Every ingestion source follows the same staged shape — **discover → fetch(→raw) →
 transform → load**, watermarked by staged cursors — so each new source is a copy of a
 known pattern, not a new design. The Congress.gov bills connector
-([`src/connectors/congress-bills.js`](src/connectors/congress-bills.js)) is the first
-implementer and the reference.
+([`src/connectors/congress-bills.js`](src/connectors/congress-bills.js)) is the
+API-source reference; the votes and legislators connectors
+([`src/connectors/congress-votes.js`](src/connectors/congress-votes.js),
+[`src/connectors/congress-legislators.js`](src/connectors/congress-legislators.js))
+are the file-source references.
 
 ## The module shape
 
-A connector is one module under `src/connectors/<source>.js` exporting:
+A connector is one module under `src/connectors/<source>.js`. Three exports are
+**required by name** — the conformance test
+([`src/connectors/conformance.test.js`](src/connectors/conformance.test.js)) asserts
+them for every load-stage node in `pipeline.manifest.js` (each such node names its
+connector in a `module` field), so a module that drifts from this shape fails
+`npm test`:
 
 | Export | Role |
 | --- | --- |
-| `SOURCE_NAME` | The `source_state` key, e.g. `'congress-bills'`. |
-| discover | Enumerating what to fetch. For bills this is config (the target congress); file sources walk a directory tree. |
-| fetch → raw | Pull from the source and land the **raw, untransformed** payload. Pages/chunks commit incrementally (see watermarks below). |
-| `transform` | Pure raw→row mapping. No I/O, no pool — unit-tested from recorded fixtures. Rejects rows that can't satisfy schema constraints; the load stage counts and logs those (deterministic, will never succeed) and skips past them. |
-| load | Idempotent writes into the domain tables, read from raw in bounded **keyset batches** (tuple bounds, since a whole fetch page shares one `now()`), so a full backfill fits the ingester's small heap. Two idempotency shapes: **upserts** (`ON CONFLICT … DO UPDATE`) for rows keyed by a natural id (bills), and **per-entity replacement** (DELETE + re-INSERT in one transaction) for complete-set child rows whose payload is the entity's whole current set (cosponsors, subjects, summaries — replacement also handles removals). **Database errors are not swallowed**: they fail the run so the unadvanced cursor re-reads the rows — only transform rejects are the designed skip path. |
+| `SOURCE_NAME` | The `source_state` key, e.g. `'congress-bills'`. Must match the manifest node's watermark key. |
+| `transform` | Pure raw→row mapping. No I/O, no pool — unit-tested from recorded fixtures. Rejects rows that can't satisfy schema constraints; the load stage counts and logs those (deterministic, will never succeed) and skips past them. A narrower variance is allowed where the schema itself absorbs bad values: votes **normalises** an unknown category to `'unknown'` (a per-value fix-up, the row still loads) instead of rejecting the whole row. |
+| `load` | The load-stage orchestrator: `load({ client, log, … })`, taking a connected client and a logger-shaped `log` ({info, warn, error}), returning the run's tallies. It composes the module's finer-grained loaders; the entrypoint owns everything around it (readiness, run logging, cursor advance). |
+
+Beyond those three, each source keeps stage-appropriate exports:
+
+| Stage | Shape |
+| --- | --- |
+| discover | Enumerating what to fetch. For bills this is config (the target congress); file sources walk the landed tree (`walkVoteFiles`, `findLegislatorFiles`). |
+| fetch → raw | API sources only: pull from the source and land the **raw, untransformed** payload. Pages/chunks commit incrementally (see watermarks below). File sources have no fetch export — the scraper container is their fetch stage. |
+| load internals | Idempotent writes into the domain tables. API sources read from raw in bounded **keyset batches** (tuple bounds, since a whole fetch page shares one `now()`), so a full backfill fits the ingester's small heap; file sources process per landed file. Two idempotency shapes: **upserts** (`ON CONFLICT … DO UPDATE`) for rows keyed by a natural id (bills, votes, legislators), and **per-entity replacement** (DELETE + re-INSERT in one transaction) for complete-set child rows whose payload is the entity's whole current set (cosponsors, subjects, summaries, vote positions, legislator terms — replacement also handles removals). **Database errors are not swallowed as a run outcome**: API loaders fail the run so the unadvanced cursor re-reads the rows; file loaders roll back the failed entity's transaction, count it, and continue, and the failed entity is retried on the next ready run — votes because the per-file skip check (`needsIngestion`) sees no current row for it, legislators because every record reprocesses each ready run anyway (there is no skip check; the idempotent upserts make that safe). The designed skip path differs by source type: API sources skip via **transform rejects** (deterministic, will never succeed); file sources skip via **pre-transform guards** that run before transform — an unparseable or wrong-shape file, or a record missing its natural id (vote_id, bioguide), is logged and counted failed, and votes additionally skip files whose DB row is already current (`needsIngestion`). File-source transforms don't reject: votes' only transform-level fix-up is the category normalisation above. |
 
 Connector modules are **pool-free and side-effect-free at import time**: they take a
-`client` (and, for API sources, a `fetchImpl`) as arguments, so everything is testable
-with stub clients and a stubbed fetch. The thin cron entrypoints
+`client` (a logger-shaped `log`, and, for API sources, a `fetchImpl`) as arguments, so
+everything is testable with stub clients and a stubbed fetch. The thin cron entrypoints
 (`src/fetch-<source>.js`, `src/ingest-<source>.js`) do the wiring: pool, logger,
 run logging, readiness gate, exit codes. Entry scripts invoke `run()` bare — never
 import them; import the connector module instead.
@@ -29,7 +43,13 @@ import them; import the connector module instead.
 
 - **Scraped file sources** (votes, legislators): raw lands as **files** on the shared
   `/congress` volume, written by the scraper container; the fetch cursor is written by
-  `scraper/write-fetch-cursor.sh`.
+  `scraper/write-fetch-cursor.sh`. The files **are** the raw store — there is no
+  `raw_payloads` row, no keyset batching, and no request budget for these sources.
+  Load-side incrementality is per entity instead: votes skip a file whose
+  `source_updated_at` in the DB is already current (`needsIngestion`; `--force`
+  overrides), and each entity loads in its own small transaction (bill stub + vote +
+  positions per vote file; legislator + terms per YAML record), so one bad entity
+  rolls back alone and never poisons the run.
 - **API sources** (Congress.gov bills): raw lands in the **`raw_payloads` table** —
   one row per `(source_name, natural_key, endpoint)`, latest payload wins. The upsert
   is guarded by `payload IS DISTINCT FROM EXCLUDED.payload`, so an unchanged payload
@@ -122,6 +142,7 @@ Postgres microsecond timestamps"); read them with `readCursor` and compare as st
 3. Thin entry script(s) in `src/`, mirroring `fetch-bills.js` / `ingest-bills.js`.
 4. Crontab entries + manifest nodes + regenerated `PIPELINE.md` — the add-a-source
    ritual in AGENTS.md ("Ingestion pipeline manifest & docs"); `npm test` fails on
-   drift.
+   drift. A load-stage node must carry a `module` field naming its connector — the
+   conformance test imports it and asserts the contract exports.
 5. Config knobs go in `compose.yml` `environment:` lists and dotenvx secrets; a
    missing secret must be a loud, clean skip — never a crashing cron.
