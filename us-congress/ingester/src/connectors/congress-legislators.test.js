@@ -9,10 +9,6 @@ import { SOURCE_NAME, findLegislatorFiles, load, parseLegislatorFile, replaceTer
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/legislators-current.yaml', import.meta.url));
 
-function silentLog() {
-  return { info: () => {}, warn: () => {}, error: () => {} };
-}
-
 // Stub pg client: records every query and returns canned rows.
 // (Same shape as congress-bills.test.js / cursor-state.test.js.)
 function stubClient(respond = () => ({ rows: [], rowCount: 1 })) {
@@ -196,4 +192,29 @@ test('load counts a record with no bioguide_id as failed without touching the DB
   assert.equal(errors[0], 'Failed to upsert legislator C000003: boom');
   assert.match(errors[1], /^Failed to upsert legislator D000004: /);
   assert.deepEqual(client.calls.map((c) => c.text).filter((t) => t === 'ROLLBACK'), ['ROLLBACK', 'ROLLBACK']);
+});
+
+test('load counts an unparseable YAML file as one failure and continues with the remaining files', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'legislators-'));
+  mkdirSync(join(dir, 'data/legislators'), { recursive: true });
+  // legislators-current.yaml is unparseable; legislators-historical.yaml is fine.
+  writeFileSync(join(dir, 'data/legislators/legislators-current.yaml'), '{ not: [valid yaml');
+  writeFileSync(
+    join(dir, 'data/legislators/legislators-historical.yaml'),
+    ['- id: { bioguide: C000003 }', '  name: { first: Carla, last: Cruz }'].join('\n'),
+  );
+
+  const errors = [];
+  const client = stubClient();
+  const result = await load({
+    client,
+    files: findLegislatorFiles(dir),
+    log: { info: () => {}, warn: () => {}, error: (m) => errors.push(m) },
+  });
+
+  assert.deepEqual(result, { upserted: 1, failed: 1 });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Failed to parse .*legislators-current\.yaml/);
+  // The good file was still processed: one full per-record transaction.
+  assert.deepEqual(client.calls.map((c) => c.text).filter((t) => t === 'COMMIT'), ['COMMIT']);
 });

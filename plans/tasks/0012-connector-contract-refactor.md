@@ -119,6 +119,22 @@ entry scripts, matching the shape task 0010 established for bills:
   the PR body; `Part of #89` / no closing keywords; post the #58 rider note after
   approval.
 
+**Review round 2 fixes (2026-07-19, all findings user-approved):**
+
+- Standards minor: an unparseable legislators YAML file no longer fails the whole
+  run — `load` catches the parse error, logs it, counts one failure, and continues
+  with the remaining files, mirroring the votes connector's handling of an
+  unparseable data.json. This is a small **deliberate behavior change vs `main`**
+  (old code died on the file), aligning the code with CONNECTORS.md's
+  never-poisons-the-run promise; pinned by a test (bad current + good historical →
+  `{ upserted: 1, failed: 1 }`). The equivalence proof is unaffected — it exercised
+  well-formed fixtures, and this path only diverges on malformed input.
+- Standards nit: dead `silentLog()` helper removed from the legislators unit tests.
+- Spec nit: CONNECTORS.md load-internals row now states the skip paths per source
+  type — transform rejects for API sources, pre-transform guards (unparseable file,
+  missing natural id, votes' `needsIngestion` currency skip) for file sources —
+  instead of claiming transform rejects for both.
+
 **Issue #58 rider note (for the PR / a #58 comment, needs approval to post):** after
 this refactor, every `source_state` write goes through `cursor-state.js` and every
 `ingestion_runs` write through `run-log.js` — two narrow modules instead of inline

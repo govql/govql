@@ -215,7 +215,20 @@ export async function load({ client, files, log }) {
 
   for (const file of files) {
     log.info(`Processing ${path.basename(file)} …`);
-    const legislators = parseLegislatorFile(file);
+
+    // A file that fails to parse counts as one failure and never poisons the
+    // run: the remaining files still load, mirroring the votes connector's
+    // handling of an unparseable data.json. The cursor still advances (the
+    // same broken file would fail again next run regardless), and the failure
+    // is visible in the log and the run's failed tally.
+    let legislators;
+    try {
+      legislators = parseLegislatorFile(file);
+    } catch (err) {
+      log.error(`Failed to parse ${file}: ${err.message}`);
+      failed++;
+      continue;
+    }
 
     for (const leg of legislators) {
       if (await loadLegislator(client, leg, { log })) upserted++;
