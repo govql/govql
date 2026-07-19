@@ -35,10 +35,12 @@ for (const node of loadNodes) {
 
     // The module's source key must be the one the manifest's watermark row
     // tracks — the handshake and the module can never drift apart silently.
-    assert.match(
-      node.watermark.key,
-      new RegExp(`source_name='${mod.SOURCE_NAME}'`),
-      `${node.module} SOURCE_NAME '${mod.SOURCE_NAME}' does not match node '${node.id}' watermark key`,
+    // Plain containment, not a RegExp: SOURCE_NAME is interpolated and must
+    // never weaken the check via regex metacharacters.
+    assert.equal(
+      node.watermark.key.includes(`source_name='${mod.SOURCE_NAME}'`),
+      true,
+      `${node.module} SOURCE_NAME '${mod.SOURCE_NAME}' does not match node '${node.id}' watermark key '${node.watermark.key}'`,
     );
   });
 }

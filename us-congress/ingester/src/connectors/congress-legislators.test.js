@@ -170,6 +170,7 @@ test('load counts a record with no bioguide_id as failed without touching the DB
       '- name: { first: No, last: Id }',
       '- id: { bioguide: C000003 }',
       '  name: { first: Carla, last: Cruz }',
+      '- id: { bioguide: D000004 }',
     ].join('\n'),
   );
 
@@ -186,8 +187,13 @@ test('load counts a record with no bioguide_id as failed without touching the DB
     log: { info: () => {}, warn: (m) => warnings.push(m), error: (m) => errors.push(m) },
   });
 
-  assert.deepEqual(result, { upserted: 0, failed: 2 });
+  // Three failures, three distinct paths: no bioguide (skipped pre-BEGIN),
+  // a DB error (rolled back), and a transform throw on the record with no
+  // name object (also rolled back — the throw happens after BEGIN).
+  assert.deepEqual(result, { upserted: 0, failed: 3 });
   assert.deepEqual(warnings, ['Skipping legislator record with no bioguide_id']);
-  assert.deepEqual(errors, ['Failed to upsert legislator C000003: boom']);
-  assert.deepEqual(client.calls.map((c) => c.text).filter((t) => t === 'ROLLBACK'), ['ROLLBACK']);
+  assert.equal(errors.length, 2);
+  assert.equal(errors[0], 'Failed to upsert legislator C000003: boom');
+  assert.match(errors[1], /^Failed to upsert legislator D000004: /);
+  assert.deepEqual(client.calls.map((c) => c.text).filter((t) => t === 'ROLLBACK'), ['ROLLBACK', 'ROLLBACK']);
 });

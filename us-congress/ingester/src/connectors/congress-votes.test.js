@@ -321,3 +321,28 @@ test('load walks the tree and tallies ingested / skipped / failed per file', asy
 
   assert.deepEqual(result, { ingested: 1, skipped: 1, failed: 1 });
 });
+
+test('loadVoteFile counts a file whose transform throws as failed instead of crashing the run', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'votes-'));
+  const file = join(dir, 'data.json');
+  // votes maps a position to null: Object.entries yields a non-iterable
+  // member list and the flattening throws mid-transform.
+  writeFileSync(file, JSON.stringify({
+    vote_id: 'h7-119.2025', chamber: 'h', congress: 119, session: '2025', number: 7,
+    votes: { Aye: null },
+  }));
+
+  const errors = [];
+  const client = stubClient((text) => {
+    if (/SELECT source_updated_at/.test(text)) return { rows: [], rowCount: 0 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await loadVoteFile(client, file, { force: false, log: { warn: () => {}, error: (m) => errors.push(m) } });
+
+  assert.equal(result, 'failed');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Failed to ingest vote h7-119\.2025/);
+  // The throw happened after BEGIN, so the transaction was rolled back.
+  assert.equal(client.calls.at(-1).text, 'ROLLBACK');
+});

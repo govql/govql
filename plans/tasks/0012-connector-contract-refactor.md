@@ -96,6 +96,29 @@ entry scripts, matching the shape task 0010 established for bills:
   pg-integration suites (which share one throwaway database and run concurrently)
   can't collide; each suite scopes its deletes/snapshots to its own rows.
 
+**Review round 1 fixes (2026-07-19, all findings user-approved):**
+
+- Major (Bug/Spec): `transform(data)` moved inside `loadVoteFile`'s try block — a
+  malformed vote file whose flattening throws now rolls back and counts as one
+  failed file instead of crashing the run and wedging the hourly cron; pinned by a
+  new unit test (`votes: { Aye: null }` → `'failed'` + ROLLBACK).
+- Spec (equivalence proof): ran the actual pre-refactor entry scripts from `main`
+  and the refactored ones against the same dockerized, Flyway-migrated Postgres and
+  the same fixture tree (7 legislators incl. senate lis_ids, house + senate votes) —
+  domain-row snapshots (legislators, legislator_terms, votes, vote_positions, bills;
+  volatile columns excluded) were **byte-identical**. Harness:
+  scratchpad `equiv/run-equivalence.sh`; result recorded for the PR body.
+- Standards: CONNECTORS.md load-internals row no longer claims a per-file skip
+  check for legislators (votes has `needsIngestion`; legislators reprocess every
+  record each ready run); bills `load` gained a stub-client test where loaders
+  return differing non-null watermarks (consumed = max, tallies sum, null ignored);
+  conformance watermark-key check switched from an unescaped RegExp to plain
+  `includes()`; legislators failing-load test now also covers a transform throw
+  (record with id but no name → BEGIN/ROLLBACK, counted failed).
+- Deferred to PR time (not code): disclose the `source_params` NULL→`'{}'` delta in
+  the PR body; `Part of #89` / no closing keywords; post the #58 rider note after
+  approval.
+
 **Issue #58 rider note (for the PR / a #58 comment, needs approval to post):** after
 this refactor, every `source_state` write goes through `cursor-state.js` and every
 `ingestion_runs` write through `run-log.js` — two narrow modules instead of inline

@@ -291,10 +291,12 @@ export async function loadVoteFile(client, filePath, { force = false, log }) {
     return 'skipped';
   }
 
-  const { vote, billStub, positions } = transform(data);
-
+  // transform stays inside the try: a malformed file whose flattening throws
+  // must count as one failed file (rolled back, logged), never crash the run —
+  // one bad entity rolls back alone, matching the pre-refactor behaviour.
   try {
     await client.query('BEGIN');
+    const { vote, billStub, positions } = transform(data);
     await upsertBillStub(client, billStub);
     await upsertVote(client, vote);
     await replacePositions(client, vote.voteId, vote.chamber, positions, { log });
@@ -308,7 +310,7 @@ export async function loadVoteFile(client, filePath, { force = false, log }) {
       err.column     && `column: ${err.column}`,
       err.constraint && `constraint: ${err.constraint}`,
     ].filter(Boolean).join(' | ');
-    log.error(`Failed to ingest vote ${vote.voteId}: ${detail}`);
+    log.error(`Failed to ingest vote ${data.vote_id}: ${detail}`);
     return 'failed';
   }
 }
