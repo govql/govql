@@ -44,10 +44,13 @@ const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS
 // the operator didn't set. Zero is legitimate — an explicit "pause fetching"
 // knob: the exhausted latch makes such runs report honestly as unverified,
 // zero-request runs rather than dead-but-verified ones.
-const rawBudget = process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000';
-const parsedBudget = Number.parseInt(rawBudget, 10);
-const HOURLY_REQUEST_BUDGET = Number.isFinite(parsedBudget) && parsedBudget >= 0 ? parsedBudget : 4000;
-if (HOURLY_REQUEST_BUDGET !== parsedBudget) {
+// Validate the RAW string, not the parsed number: parseInt's prefix parsing
+// would silently turn '1e3' into 1 or '0.5' into 0 without ever tripping a
+// numeric check.
+const rawBudget = (process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000').trim();
+const budgetValid = /^\d+$/.test(rawBudget);
+const HOURLY_REQUEST_BUDGET = budgetValid ? Number.parseInt(rawBudget, 10) : 4000;
+if (!budgetValid) {
   logger.warn(
     `CONGRESS_GOV_HOURLY_REQUEST_BUDGET=${JSON.stringify(rawBudget)} is not a non-negative integer — ` +
     `falling back to ${HOURLY_REQUEST_BUDGET}`,
