@@ -135,6 +135,16 @@ entry scripts, matching the shape task 0010 established for bills:
   missing natural id, votes' `needsIngestion` currency skip) for file sources —
   instead of claiming transform rejects for both.
 
+**Review round 3 (2026-07-19):** the round-2 parse guard was found one case too
+narrow — a YAML file parsing to a non-array (empty → `undefined`, comments-only →
+`null`, truncated → mapping/scalar, bare string) still crashed the run via the
+per-record loop (and a bare string iterated per character). Fixed in `289eb28`:
+`parseLegislatorFile` throws on a non-array result, routing every broken-file
+shape through the existing catch; pinned by an empty-file test and verified
+empirically by the review panel (five broken shapes + one good file →
+`{ upserted: 1, failed: 5 }`, no crash). A CONNECTORS.md phrase misplacing the
+guards was loosened. Zero open findings across all lenses.
+
 **Issue #58 rider note (for the PR / a #58 comment, needs approval to post):** after
 this refactor, every `source_state` write goes through `cursor-state.js` and every
 `ingestion_runs` write through `run-log.js` — two narrow modules instead of inline
