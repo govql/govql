@@ -58,7 +58,9 @@ async function staleCongresses(client) {
 // the new ones commit atomically (never an empty slice), and the watermark can
 // only advance if the whole rebuild committed. Each build is scoped to one
 // congress via a CTE prefilter so cost is independent of how much historical
-// data exists. Only Yea/Nay positions count (Present / Not Voting / VP ignored).
+// data exists. Pair and majority counting use literal Yea/Nay positions
+// (Present / Not Voting / VP ignored); vote_similarity's party dominance counts
+// every up-or-down position by meaning (Yea/Aye/Guilty vs Nay/No/Not Guilty).
 //
 // The transaction runs at REPEATABLE READ so both builds and the watermark
 // capture (max(votes.updated_at), computed in SQL) read one consistent snapshot:
@@ -84,25 +86,58 @@ async function rebuildAggregatesForCongress(client, congress) {
     await client.query('SET LOCAL max_parallel_workers_per_gather = 0');
     await client.query('SET LOCAL jit = off');
 
-    // Pairwise member-to-member agreement.
+    // Pairwise member-to-member agreement. party_a/party_b are each member's
+    // dominant vote-time party in the congress+chamber: the party they cast the
+    // most up-or-down positions under, classified by MEANING (Yea/Aye/Guilty =
+    // yes, Nay/No/Not Guilty = no — the House records many roll calls in the
+    // Aye/No vocabulary), ties broken alphabetically. Derived per chamber so a
+    // member who moved chambers mid-congress is labeled correctly in each.
+    // party_counts scans vote_positions itself rather than reusing cpos: cpos's
+    // pair-counting filter is still literal Yea/Nay (widening it changes shipped
+    // shared_votes/agreed values — tracked separately), and party dominance must
+    // not depend on that. The dominant map joins the ~100-150k grouped pair
+    // rows, NOT the ~100M-row pairwise stream, so the memory-critical aggregate
+    // above work_mem is unchanged (see AGENTS.md "Aggregate rebuild memory").
+    // agreement_rate / cross_party are GENERATED columns — Postgres fills them.
     await client.query('DELETE FROM vote_similarity WHERE congress = $1', [
       congress,
     ]);
     await client.query(
       `INSERT INTO vote_similarity
-         (congress, chamber, member_a, member_b, shared_votes, agreed)
+         (congress, chamber, member_a, member_b, shared_votes, agreed, party_a, party_b)
        WITH cpos AS (
-         SELECT vp.vote_id, vp.bioguide_id, vp.position, v.congress, v.chamber
+         SELECT vp.vote_id, vp.bioguide_id, vp.position, vp.party, v.congress, v.chamber
          FROM vote_positions vp
          JOIN votes v ON v.vote_id = vp.vote_id
          WHERE v.congress = $1 AND vp.position IN ('Yea', 'Nay')
+       ),
+       pairs AS (
+         SELECT a.congress, a.chamber,
+                a.bioguide_id AS member_a, b.bioguide_id AS member_b,
+                count(*)::int AS shared_votes,
+                count(*) FILTER (WHERE a.position = b.position)::int AS agreed
+         FROM cpos a
+         JOIN cpos b ON b.vote_id = a.vote_id AND a.bioguide_id < b.bioguide_id
+         GROUP BY a.congress, a.chamber, a.bioguide_id, b.bioguide_id
+       ),
+       party_counts AS (
+         SELECT v.chamber, vp.bioguide_id, vp.party, count(*) AS positions
+         FROM vote_positions vp
+         JOIN votes v ON v.vote_id = vp.vote_id
+         WHERE v.congress = $1
+           AND vp.position IN ('Yea', 'Aye', 'Guilty', 'Nay', 'No', 'Not Guilty')
+         GROUP BY v.chamber, vp.bioguide_id, vp.party
+       ),
+       dominant_party AS (
+         SELECT DISTINCT ON (chamber, bioguide_id) chamber, bioguide_id, party
+         FROM party_counts
+         ORDER BY chamber, bioguide_id, positions DESC, party
        )
-       SELECT a.congress, a.chamber, a.bioguide_id, b.bioguide_id,
-              count(*)::int,
-              count(*) FILTER (WHERE a.position = b.position)::int
-       FROM cpos a
-       JOIN cpos b ON b.vote_id = a.vote_id AND a.bioguide_id < b.bioguide_id
-       GROUP BY a.congress, a.chamber, a.bioguide_id, b.bioguide_id`,
+       SELECT p.congress, p.chamber, p.member_a, p.member_b,
+              p.shared_votes, p.agreed, da.party, db.party
+       FROM pairs p
+       JOIN dominant_party da ON da.chamber = p.chamber AND da.bioguide_id = p.member_a
+       JOIN dominant_party db ON db.chamber = p.chamber AND db.bioguide_id = p.member_b`,
       [congress],
     );
 

@@ -4,7 +4,10 @@ All notable changes to `govql-mcp-server` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.4.0] — 2026-07-09
+## [0.4.0] — 2026-07-17
+
+*First PyPI release since 0.1.0; also delivers the previously unpublished
+0.1.1–0.3.0 changes.*
 
 ### Added
 
@@ -15,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `find_party_defectors` tool — members ranked by lowest own-party agreement in
   a congress, with optional party/chamber filters.
 
-## [0.3.0] — 2026-07-09
+## [0.3.0] — 2026-07-15
+
+*Source-only milestone, dated by its merge to main; never published to PyPI
+(first shipped in 0.4.0).*
 
 ### Added
 
@@ -25,7 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   per-party breakdown; individual member positions are optional and filterable
   by party/state/position, capped and byte-guarded.
 
-## [0.2.0] — 2026-07-09
+## [0.2.0] — 2026-07-15
+
+*Source-only milestone, dated by its merge to main; never published to PyPI
+(first shipped in 0.4.0).*
 
 ### Changed
 
@@ -44,7 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Discovery results also report `total_matches` — how many rows match the filter
   overall — so callers know when to refine or raise `limit`.
 
-## [0.1.1] — 2026-07-03
+## [0.1.1] — 2026-07-09
+
+*Tagged in git but never published to PyPI (first shipped in 0.4.0).*
 
 ### Changed
 
@@ -56,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   views in the `list_types` tip. Documentation only — no change to the tool
   surface.
 
-## [0.1.0] — 2026-05-28
+## [0.1.0] — 2026-06-01
 
 Initial release.
 
