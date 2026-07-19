@@ -56,6 +56,8 @@ const TYPE_NAME = {
   committees: 'Committee',
   bills: 'Bill',
   bill_cosponsors: 'BillCosponsor',
+  bill_subjects: 'BillSubject',
+  bill_summaries: 'BillSummary',
   bill_committees: 'BillCommittee',
   committee_memberships: 'CommitteeMembership',
   api_keys: 'ApiKey',
@@ -71,6 +73,8 @@ const CONNECTION_NAME = {
   committees: 'CommitteesConnection',
   bills: 'BillsConnection',
   bill_cosponsors: 'BillCosponsorsConnection',
+  bill_subjects: 'BillSubjectsConnection',
+  bill_summaries: 'BillSummariesConnection',
   bill_committees: 'BillCommitteesConnection',
   committee_memberships: 'CommitteeMembershipsConnection',
 };
@@ -84,6 +88,8 @@ const ALL_QUERY = {
   committees: 'allCommittees',
   bills: 'allBills',
   bill_cosponsors: 'allBillCosponsors',
+  bill_subjects: 'allBillSubjects',
+  bill_summaries: 'allBillSummaries',
   bill_committees: 'allBillCommittees',
   committee_memberships: 'allCommitteeMemberships',
 };
@@ -97,6 +103,8 @@ const TABLE_ORDER = [
   'bills',
   'committees',
   'bill_cosponsors',
+  'bill_subjects',
+  'bill_summaries',
   'bill_committees',
   'committee_memberships',
 ];
@@ -109,6 +117,8 @@ const FILE_SLUG = {
   bills: 'bills',
   committees: 'committees',
   bill_cosponsors: 'bill-cosponsors',
+  bill_subjects: 'bill-subjects',
+  bill_summaries: 'bill-summaries',
   bill_committees: 'bill-committees',
   committee_memberships: 'committee-memberships',
 };
@@ -347,12 +357,14 @@ function parseSchema(sql) {
     t.columns.push(...parseColumns(m[2]));
   }
 
-  // COMMENT ON TABLE — both plain 'text' and E'escape\ntext' forms
+  // COMMENT ON TABLE — both plain 'text' and E'escape\ntext' forms.
+  // SQL escapes an embedded single quote by doubling it ('') — unescape so
+  // the published docs don't render the doubled form literally.
   const tblCmtRe = /COMMENT ON TABLE (\w+) IS E?'([\s\S]*?)';/g;
   for (const m of sql.matchAll(tblCmtRe)) {
     const t = tables[m[1]];
     if (!t) continue;
-    const raw = m[2].replace(/\\n/g, '\n');
+    const raw = m[2].replace(/\\n/g, '\n').replace(/''/g, "'");
     t.omit = raw.includes('@omit');
     t.comment = raw.replace(/@omit\s*/g, '').trim();
   }
@@ -362,7 +374,7 @@ function parseSchema(sql) {
   for (const m of sql.matchAll(colCmtRe)) {
     const t = tables[m[1]];
     if (!t) continue;
-    const raw = m[3].replace(/\\n/g, '\n');
+    const raw = m[3].replace(/\\n/g, '\n').replace(/''/g, "'");
     const nameOverride = raw.match(/@name\s+(\w+)/)?.[1] ?? null;
     const comment = raw.replace(/@\w+[^\n]*\n?/, '').trim();
 

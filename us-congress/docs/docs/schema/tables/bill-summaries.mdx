@@ -1,0 +1,38 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: BillSummary
+sidebar_position: 9
+---
+
+# BillSummary
+
+CRS-authored summaries of a bill, from the Congress.gov /summaries endpoint. One row per bill/summary version (a bill gains a new version as it advances, e.g. Introduced, Reported); the set is replaced wholesale when the bill updates.
+
+**GraphQL type:** `BillSummary` · **Connection:** `BillSummariesConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allBillSummaries(filter, orderBy, first, last, before, after)` | `BillSummariesConnection` | Paginated list with filtering and ordering |
+| `billSummaryById(id: BigInt!)` | `BillSummary` | Look up by primary key |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `billId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `versionCode` | `String` | Congress.gov summary version code, e.g. '00' (Introduced). <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+| `actionDesc` | `String` | Bill action the summary version corresponds to, e.g. 'Introduced in House'. |
+| `actionDate` | `Date` | Date of the action the summary version corresponds to. |
+| `summaryText` | `String` | Summary body as published by CRS — raw upstream HTML, stored and served unsanitized. Consumers MUST sanitize before rendering as HTML. |
+| `sourceUpdatedAt` | `Datetime` | When Congress.gov last updated this summary version. |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `billByBillId` | `Bill` | `billId` |

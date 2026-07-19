@@ -1,0 +1,37 @@
+{
+  "pagination": {
+    "count": 4
+  },
+  "request": {
+    "billNumber": "5",
+    "billType": "s",
+    "billUrl": "https://api.congress.gov/v3/bill/119/s/5?format=json",
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  },
+  "subjects": {
+    "legislativeSubjects": [
+      {
+        "name": "Border security and unlawful immigration",
+        "updateDate": "2025-01-10T15:38:18Z"
+      },
+      {
+        "name": "Civil actions and liability",
+        "updateDate": "2025-01-10T15:38:18Z"
+      },
+      {
+        "name": "Crimes against property",
+        "updateDate": "2025-01-10T15:38:18Z"
+      },
+      {
+        "name": "Criminal investigation, prosecution, interrogation",
+        "updateDate": "2025-01-10T15:38:18Z"
+      }
+    ],
+    "policyArea": {
+      "name": "Immigration",
+      "updateDate": "2025-01-10T13:19:22Z"
+    }
+  }
+}

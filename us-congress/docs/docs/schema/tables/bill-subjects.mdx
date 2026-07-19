@@ -1,0 +1,34 @@
+---
+# AUTO-GENERATED — do not edit. Re-run: npm run generate-schema-docs
+sidebar_label: BillSubject
+sidebar_position: 8
+---
+
+# BillSubject
+
+Legislative subject terms assigned to a bill by the Congressional Research Service, from the Congress.gov /subjects endpoint. One row per bill/term; the set is replaced wholesale when the bill updates. The primary policy area lives on bills.policy_area, not here.
+
+**GraphQL type:** `BillSubject` · **Connection:** `BillSubjectsConnection`
+
+## Queries
+
+| Query | Returns | Description |
+|-------|---------|-------------|
+| `allBillSubjects(filter, orderBy, first, last, before, after)` | `BillSubjectsConnection` | Paginated list with filtering and ordering |
+| `billSubjectById(id: BigInt!)` | `BillSubject` | Look up by primary key |
+
+## Fields
+
+| Field | GraphQL Type | Notes |
+|-------|-------------|-------|
+| `id` | `BigInt` |  <span style={{background:'#1877f2',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>PK</span> |
+| `billId` | `String` |  <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> <span style={{background:'#198754',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>FK</span> |
+| `subject` | `String` | Legislative subject term, e.g. "Health care costs and insurance". <span style={{background:'#dc3545',color:'#fff',borderRadius:'3px',padding:'1px 5px',fontSize:'0.7rem',fontWeight:600,whiteSpace:'nowrap'}}>required</span> |
+
+## Relationships
+
+### Belongs to
+
+| Field | Returns | Via |
+|-------|---------|-----|
+| `billByBillId` | `Bill` | `billId` |

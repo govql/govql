@@ -1,0 +1,57 @@
+{
+  "pagination": {
+    "count": 5
+  },
+  "request": {
+    "billNumber": "5",
+    "billType": "s",
+    "billUrl": "https://api.congress.gov/v3/bill/119/s/5?format=json",
+    "congress": "119",
+    "contentType": "application/json",
+    "format": "json"
+  },
+  "titles": [
+    {
+      "title": "Laken Riley Act",
+      "titleType": "Display Title",
+      "titleTypeCode": 45,
+      "updateDate": "2025-02-01T12:03:17Z"
+    },
+    {
+      "billTextVersionCode": "ENR",
+      "billTextVersionName": "Enrolled Bill",
+      "chamberCode": "J",
+      "chamberName": "Joint",
+      "title": "Laken Riley Act",
+      "titleType": "Short Titles from ENR (Enrolled) bill text",
+      "titleTypeCode": 147,
+      "updateDate": "2025-01-24T02:38:19Z"
+    },
+    {
+      "billTextVersionCode": "ES",
+      "billTextVersionName": "Engrossed in Senate",
+      "chamberCode": "S",
+      "chamberName": "Senate",
+      "title": "Laken Riley Act",
+      "titleType": "Short Title(s) as Passed Senate",
+      "titleTypeCode": 105,
+      "updateDate": "2025-01-21T04:53:17Z"
+    },
+    {
+      "billTextVersionCode": "PCS",
+      "billTextVersionName": "Placed on Calendar Senate",
+      "chamberCode": "S",
+      "chamberName": "Senate",
+      "title": "Laken Riley Act",
+      "titleType": "Short Title(s) from PCS (Placed on Senate Calendar) bill text",
+      "titleTypeCode": 152,
+      "updateDate": "2025-01-08T14:53:18Z"
+    },
+    {
+      "title": "A bill to require the Secretary of Homeland Security to take into custody aliens who have been charged in the United States with theft, and for other purposes.",
+      "titleType": "Official Title as Introduced",
+      "titleTypeCode": 6,
+      "updateDate": "2025-01-07T11:56:16Z"
+    }
+  ]
+}

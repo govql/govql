@@ -16,7 +16,7 @@ A connector is one module under `src/connectors/<source>.js` exporting:
 | discover | Enumerating what to fetch. For bills this is config (the target congress); file sources walk a directory tree. |
 | fetch → raw | Pull from the source and land the **raw, untransformed** payload. Pages/chunks commit incrementally (see watermarks below). |
 | `transform` | Pure raw→row mapping. No I/O, no pool — unit-tested from recorded fixtures. Rejects rows that can't satisfy schema constraints; the load stage counts and logs those (deterministic, will never succeed) and skips past them. |
-| load | Idempotent upserts into the domain tables (`ON CONFLICT … DO UPDATE`), read from raw in bounded **keyset batches** (tuple bounds, since a whole fetch page shares one `now()`), so a full backfill fits the ingester's small heap. **Database errors are not swallowed**: they fail the run so the unadvanced cursor re-reads the rows — only transform rejects are the designed skip path. |
+| load | Idempotent writes into the domain tables, read from raw in bounded **keyset batches** (tuple bounds, since a whole fetch page shares one `now()`), so a full backfill fits the ingester's small heap. Two idempotency shapes: **upserts** (`ON CONFLICT … DO UPDATE`) for rows keyed by a natural id (bills), and **per-entity replacement** (DELETE + re-INSERT in one transaction) for complete-set child rows whose payload is the entity's whole current set (cosponsors, subjects, summaries — replacement also handles removals). **Database errors are not swallowed**: they fail the run so the unadvanced cursor re-reads the rows — only transform rejects are the designed skip path. |
 
 Connector modules are **pool-free and side-effect-free at import time**: they take a
 `client` (and, for API sources, a `fetchImpl`) as arguments, so everything is testable
@@ -35,6 +35,14 @@ import them; import the connector module instead.
   is guarded by `payload IS DISTINCT FROM EXCLUDED.payload`, so an unchanged payload
   does not touch `fetched_at` — which is what keeps a nothing-new rerun a cheap no-op
   end to end.
+- **Per-entity fan-out endpoints** (bills: `bill-detail`, `bill-cosponsors`,
+  `bill-subjects`, `bill-summaries`, `bill-titles` beside `bill-list`): each extra
+  endpoint is its own `endpoint` tag under the **same natural key**, fetched only for
+  entities whose list payload changed (the diff guard doubles as the change detector)
+  and stored as the entity's **complete current set** — paginated endpoints are merged
+  before the write, never stored page by page. An entity's list row and its fan-out
+  rows commit **in one transaction**: landing the list row without its fan-out would
+  make the resumed run see the entity as unchanged and skip its sub-entities forever.
 
 ## Watermarks and gating
 
@@ -46,9 +54,9 @@ Staged cursors live in `source_state` (see the master plan's "Staged cursors" an
   retargeting the config knob starts a fresh backfill instead of filtering behind
   another unit's watermark):
   - `fetch` — the **resume** position: the max consumed source watermark (bills: max
-    `updateDate`), advanced **in the same transaction as each committed page** of raw
+    `updateDate`), advanced **in the same transaction as each committed chunk** of raw
     payloads and **monotonic** (never regresses), so a crash resumes from the last
-    committed page and a verification re-walk can't rewind it. Backfill is the same
+    committed chunk and a verification re-walk can't rewind it. Backfill is the same
     code with a NULL starting cursor.
   - `fetch_verified` — the **verified-through** position: advanced only after a clean
     verification pass (below). A crash or pass-cap leaves it behind, and the next run
@@ -69,6 +77,16 @@ Staged cursors live in `source_state` (see the master plan's "Staged cursors" an
   on the source and skip loudly if another run holds it. `fetched_at` is
   transaction-start `now()`, so overlapping fetch runs could commit rows behind an
   already-advanced load cursor.
+- **Request budget (rate limiting)** — API fetch runs carry a per-run request budget
+  (`requestBudget`; bills: `CONGRESS_GOV_HOURLY_REQUEST_BUDGET`, default 4000 against
+  api.data.gov's 5,000/hour). The chosen strategy is **bail out cleanly, resume next
+  tick** — not throttling: every list page and fan-out request spends from the budget,
+  and when a check is refused the run stops **before the next entity**, commits what
+  finished, and returns unverified so the next cron tick resumes from the committed
+  cursors (a long backfill drip-feeds across hourly runs this way). Two invariants:
+  a started entity always completes (its pagination follows may overrun the cap — the
+  default leaves headroom), and the budget check happens **before** an entity's list
+  upsert, never between it and its fan-out.
 - **Grace-capped load advance** — for the same reason, the load never advances its
   cursor into the last few minutes (`capWatermark`): an in-flight fetch page
   transaction gets time to land, and the clamped tail is simply re-read next run.
@@ -88,13 +106,19 @@ Postgres microsecond timestamps"); read them with `readCursor` and compare as st
 | --- | --- | --- |
 | `readCursor` / `advanceFetchCursor` / `advanceLoadCursor` / `loadReadiness` | [`src/cursor-state.js`](src/cursor-state.js) | Precision-preserving `source_state` reads/writes and the file-source handshake predicate. |
 | `openRun` / `succeedRun` / `failRun` | [`src/run-log.js`](src/run-log.js) | The `ingestion_runs` lifecycle every stage records. |
-| chunked per-page commit | `fetchPagesIntoRaw` in the bills connector | The per-page BEGIN → raw upserts → cursor advance → COMMIT loop; generalize it out of the bills connector when the second API source arrives, rather than speculatively now. |
+| chunked commit + fan-out | `fetchPagesIntoRaw` in the bills connector | The per-chunk BEGIN → list raw upserts → per-entity fan-out → cursor advance → COMMIT loop; generalize it out of the bills connector when the second API source arrives, rather than speculatively now. |
+| `requestBudget` | bills connector | The per-run request counter behind the bail-out-cleanly rate strategy above. |
+| stale-raw keyset batches | `staleRawBatches` (internal) + `loadStaleEndpointRaws` in the bills connector | The cursor-bounded, tuple-keyset read loop every endpoint loader shares (extracted when the 0011 sub-entity loaders became its second consumer), plus the transform/apply runner with the missing-parent skip guard. |
 
 ## Adding a source, end to end
 
 1. Migration for any new tables/columns (`db/migrations/Vnnn__…`; keep DDL parseable —
    see AGENTS.md).
-2. Connector module under `src/connectors/`, with fixture-driven tests beside it.
+2. Connector module under `src/connectors/`, with fixture-driven tests beside it. A
+   guarantee that lives in Postgres semantics (jsonb comparison, COALESCE no-ops) goes
+   in a `*.pg-integration.test.js` sibling instead — `npm run test:integration` runs
+   those against a throwaway dockerized Postgres migrated with the real migrations;
+   they skip themselves under plain `npm test`.
 3. Thin entry script(s) in `src/`, mirroring `fetch-bills.js` / `ingest-bills.js`.
 4. Crontab entries + manifest nodes + regenerated `PIPELINE.md` — the add-a-source
    ritual in AGENTS.md ("Ingestion pipeline manifest & docs"); `npm test` fails on

@@ -90,8 +90,12 @@ Durable decisions that apply across all tasks:
   API fetchers run in the **ingester** container as their own cron entries (stage
   boundary ≠ container boundary); API keys live in the droplet's dotenvx secrets.
   Backfill and incremental are the same code path — backfill is an earlier starting
-  watermark. First implementer: Congress.gov bills (current congress; depth is a
-  config knob).
+  watermark. **Rate limiting** is a per-run request budget with clean bail-out (not
+  throttling): a run that hits the budget commits what finished and the next cron
+  tick resumes from the committed cursors; a started entity always completes so no
+  stored payload is ever a truncated merge. First implementer: Congress.gov bills
+  (current congress; depth is a config knob), fanned out per changed bill to the
+  detail/cosponsors/subjects/summaries/titles endpoints (task 0011).
 - **Deployment (continuous *delivery*)**: the `us-congress` stack ships via
   merge-to-`main` → CI builds four immutable **SHA-tagged, public GHCR images**
   (`scraper`, `ingester`, `server`, docs-baked-into-`nginx` multi-stage) → **one-click
@@ -118,5 +122,5 @@ Durable decisions that apply across all tasks:
 - [x] 0008 · Deployment docs & runbook (after 0004, 0005, 0006, 0007) → tasks/done/0008-deployment-docs.md
 - [x] 0009 · Target node24-runtime action versions in the workflow (after 0003, 0004, 0005, 0006, 0007) → tasks/done/0009-workflow-node24-actions.md
 - [x] 0010 · Connector contract + raw_payloads + bills core fetch/load → tasks/done/0010-bills-connector-core.md
-- [ ] 0011 · Bill sub-entities + detail: cosponsors, subjects, summaries, detail, titles (after 0010) → tasks/0011-bill-sub-entities.md
+- [>] 0011 · Bill sub-entities + detail: cosponsors, subjects, summaries, detail, titles (after 0010) → tasks/0011-bill-sub-entities.md
 - [ ] 0012 · Refactor votes + legislators onto the connector contract (after 0010) → tasks/0012-connector-contract-refactor.md

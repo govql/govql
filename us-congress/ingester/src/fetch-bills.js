@@ -6,8 +6,8 @@
  * implementer of the connector contract (see CONNECTORS.md) — unlike the
  * scraped file sources, this stage writes its own cursors in source_state
  * (keyed per congress): the `fetch` resume cursor is the max consumed
- * updateDate, advanced inside the same transaction as each committed page, so
- * a kill mid-backfill resumes from the last committed page; backfill is this
+ * updateDate, advanced inside the same transaction as each committed chunk, so
+ * a kill mid-backfill resumes from the last committed chunk; backfill is this
  * same code with a NULL starting cursor. Whenever the catch-up pass was
  * multi-page, was truncated, or the resume cursor sits ahead of the
  * `fetch_verified` cursor (an earlier run's verification crashed or capped),
@@ -15,19 +15,47 @@
  * new — only then does `fetch_verified` advance. Offset-pagination boundary
  * skips therefore can't strand a bill behind the cursors, even across crashes.
  *
+ * Since task 0011 the fetch also fans out per changed bill: five per-bill
+ * endpoints (detail, cosponsors, subjects, summaries, titles) land in
+ * raw_payloads inside the same chunk transaction as the bill's list row, so
+ * an interrupted fan-out resumes without re-fetching completed bills. A
+ * per-run request budget keeps the whole run under the api.data.gov hourly
+ * rate limit: when it runs out the run bails cleanly mid-walk (cursor
+ * committed, verification deferred) and the next cron tick resumes — the
+ * initial ~90k-request backfill drip-feeds over ~a day this way.
+ *
  * Config: CONGRESS_GOV_API_KEY (required — without it the run is a loud,
- * clean skip so the cron never crashes) and CONGRESS_GOV_TARGET_CONGRESS
- * (the backfill-depth knob, default 119).
+ * clean skip so the cron never crashes), CONGRESS_GOV_TARGET_CONGRESS
+ * (the backfill-depth knob, default 119), and
+ * CONGRESS_GOV_HOURLY_REQUEST_BUDGET (default 4000 — headroom under the
+ * 5,000/hour api.data.gov limit for pagination overrun; see requestBudget).
  */
 
 import { pool } from './db.js';
 import { logger } from './logger.js';
 import { readCursor } from './cursor-state.js';
 import { openRun, succeedRun, failRun } from './run-log.js';
-import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, toFromDateTime } from './connectors/congress-bills.js';
+import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, requestBudget, toFromDateTime } from './connectors/congress-bills.js';
 
 const API_KEY = process.env.CONGRESS_GOV_API_KEY;
 const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS ?? '119', 10);
+// A malformed value parses to NaN, which would refuse every request; fall
+// back to the default LOUDLY rather than run a dead fetch or spend a budget
+// the operator didn't set. Zero is legitimate — an explicit "pause fetching"
+// knob: the exhausted latch makes such runs report honestly as unverified,
+// zero-request runs rather than dead-but-verified ones.
+// Validate the RAW string, not the parsed number: parseInt's prefix parsing
+// would silently turn '1e3' into 1 or '0.5' into 0 without ever tripping a
+// numeric check.
+const rawBudget = (process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000').trim();
+const budgetValid = /^\d+$/.test(rawBudget);
+const HOURLY_REQUEST_BUDGET = budgetValid ? Number.parseInt(rawBudget, 10) : 4000;
+if (!budgetValid) {
+  logger.warn(
+    `CONGRESS_GOV_HOURLY_REQUEST_BUDGET=${JSON.stringify(rawBudget)} is not a non-negative integer — ` +
+    `falling back to ${HOURLY_REQUEST_BUDGET}`,
+  );
+}
 
 async function run() {
   if (!API_KEY) {
@@ -64,10 +92,13 @@ async function run() {
     const fromDateTime = toFromDateTime(await readCursor(client, fetchStateName(TARGET_CONGRESS), 'fetch'));
     runId = await openRun(client, 'bills_fetch', { congress: TARGET_CONGRESS, fromDateTime });
 
-    const { passes, pages, upserted, unchanged, cursor, verified } = await fetchPagesUntilClean({
+    const budget = requestBudget(HOURLY_REQUEST_BUDGET);
+    const { passes, pages, upserted, unchanged, fanoutSkipped, fanoutNotFound, cursor, verified } = await fetchPagesUntilClean({
       client,
       congress: TARGET_CONGRESS,
       apiKey: API_KEY,
+      fanout: {},
+      budget,
       log: (msg) => logger.warn(msg),
       onPage: (p) =>
         logger.info(
@@ -76,16 +107,26 @@ async function run() {
         ),
     });
 
-    // The fetch cursor already advanced per committed page; closing the run is
-    // bookkeeping only, so it needs no shared transaction with the cursor.
-    // `upserted` is the distinct-key count across passes. The verification
-    // outcome is recorded on the run row so a wedged fetch (every run giving
-    // up unverified) is queryable in ingestion_runs, not just a log line.
-    await succeedRun(client, runId, upserted, { verified, passes });
+    // The fetch cursor already advanced per committed chunk; closing the run
+    // is bookkeeping only, so it needs no shared transaction with the cursor.
+    // `upserted` is the distinct-key count across passes. The verification and
+    // budget outcomes are recorded on the run row so a wedged fetch (every run
+    // giving up unverified) is queryable in ingestion_runs, not just a log line.
+    await succeedRun(client, runId, upserted, {
+      verified,
+      passes,
+      requests: budget.used,
+      budgetExhausted: budget.exhausted,
+      fanoutSkipped,
+      fanoutNotFound,
+    });
     const summary =
       `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes} ` +
       `(${verified ? 'verified' : 'NOT verified — next run re-walks'}), pages: ${pages}, ` +
-      `upserted: ${upserted}, unchanged: ${unchanged}, cursor: ${cursor ?? 'none'}`;
+      `upserted: ${upserted}, unchanged: ${unchanged}, requests: ${budget.used}` +
+      `${budget.exhausted ? ' (budget exhausted — resuming next tick)' : ''}` +
+      `${fanoutSkipped > 0 ? `, fan-out skipped for ${fanoutSkipped} malformed item(s)` : ''}` +
+      `${fanoutNotFound > 0 ? `, ${fanoutNotFound} sub-endpoint 404(s) stored as empty` : ''}, cursor: ${cursor ?? 'none'}`;
     if (verified) logger.info(summary);
     else logger.warn(summary);
 
