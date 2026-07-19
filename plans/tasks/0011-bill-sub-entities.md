@@ -138,6 +138,14 @@ parked separately in issue #91 — not this task.
   with the real migrations — it pins the jsonb changed-check (reordered-key
   payload does not re-fan-out) and COALESCE/updated_at semantics, and its
   first run caught the cast bug. 99 stub tests + 2 pg tests green.
+- 2026-07-18 (review round 3): applied all four residual findings with user
+  approval. requestBudget latches exhausted on any refusal (a NaN limit from
+  a malformed env var previously refused everything while reporting verified
+  runs) and fetch-bills validates the env var with a fallback; pagination.next
+  now resolves against the returning page's URL (path-relative links keep
+  /v3); the pg-integration suite runs in CI (new workflow step); sub-endpoint
+  404 counts (fanoutNotFound) surface in the run summary and ingestion_runs
+  outcome alongside fanoutSkipped. 100 stub tests + 2 pg tests green.
 - Decisions made in-flight (no [decision] items were open): rate strategy =
   clean bail-out (documented); fan-out chunk size 25; one load cursor spans all
   six endpoints (each loader drains its endpoint's backlog, so the shared

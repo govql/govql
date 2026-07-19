@@ -95,8 +95,12 @@ export function requestBudget(limit = Infinity) {
   return {
     take(n = 1) { used += n; },
     has(n = 1) {
-      if (used + n > limit) exhausted = true;
-      return used + n <= limit;
+      // Latch on the refusal itself, not on a > comparison: a NaN limit
+      // (malformed env var) makes every comparison false, and refusing
+      // without latching would report dead runs as verified successes.
+      const ok = used + n <= limit;
+      if (!ok) exhausted = true;
+      return ok;
     },
     get used() { return used; },
     get exhausted() { return exhausted; },
@@ -249,7 +253,10 @@ async function fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetc
     items.push(...descriptor.items(page));
     const next = page.pagination?.next;
     if (!next) break;
-    const resolved = new URL(next, baseUrl);
+    // Resolve against the URL of the page that returned the link — correct
+    // for absolute, root-relative, AND path-relative forms (resolving a
+    // path-relative link against the base URL would drop its /v3 segment).
+    const resolved = new URL(next, url);
     if (resolved.origin !== new URL(baseUrl).origin) {
       throw new Error(
         `Congress.gov ${descriptor.endpoint} pagination.next left the API origin — refusing to follow it`,
@@ -335,7 +342,8 @@ export async function fetchPagesIntoRaw({
   let pages = 0;
   let upserted = 0;
   let unchanged = 0;
-  let fanoutSkipped = 0; // malformed list items that cannot form a per-bill URL
+  let fanoutSkipped = 0;  // malformed list items that cannot form a per-bill URL
+  let fanoutNotFound = 0; // sub-endpoint 404s stored as empty payloads
   // A walk is complete when it ended because the API advertised no further
   // page — NOT when an anomalous empty-page-with-next truncated it, and not
   // when the request budget ran out. The verification logic must never treat
@@ -398,6 +406,7 @@ export async function fetchPagesIntoRaw({
             } else {
               const result = await fetchSubEndpointPayloads({ key, path, apiKey, baseUrl, limit, fetchImpl, budget, log });
               subPayloads = result.payloads;
+              fanoutNotFound += result.notFound;
             }
           }
         }
@@ -449,7 +458,7 @@ export async function fetchPagesIntoRaw({
   }
 
   if (budget?.exhausted) complete = false;
-  return { pages, upserted, unchanged, fanoutSkipped, cursor, complete };
+  return { pages, upserted, unchanged, fanoutSkipped, fanoutNotFound, cursor, complete };
 }
 
 
@@ -500,6 +509,7 @@ export async function fetchPagesUntilClean({
   let pages = 0;
   let unchanged = 0;
   let fanoutSkipped = 0;
+  let fanoutNotFound = 0;
   let cursor = resume;
 
   const runPass = async (anchor) => {
@@ -523,6 +533,7 @@ export async function fetchPagesUntilClean({
     pages += result.pages;
     unchanged += result.unchanged;
     fanoutSkipped += result.fanoutSkipped;
+    fanoutNotFound += result.fanoutNotFound;
     // Merge only a real advance: a pass that fetched nothing echoes its anchor
     // back in truncated API format, and comparing that against the
     // full-precision cursor string would clobber it (lexically 'Z' > '.').
@@ -549,14 +560,14 @@ export async function fetchPagesUntilClean({
         `Bills fetch stopped at the request budget (${budget.used} requests) — ` +
         `verification deferred; the next run resumes from the committed cursors`,
       );
-      return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, cursor, verified: false };
+      return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, fanoutNotFound, cursor, verified: false };
     }
     if (passes >= maxPasses) {
       log(
         `Bills fetch verification did not converge after ${passes} passes — ` +
         `the verified cursor stays behind and the next run resumes verification from it`,
       );
-      return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, cursor, verified: false };
+      return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, fanoutNotFound, cursor, verified: false };
     }
     const pass = await runPass(verified);
     // Clean = the pass wrote nothing new AND actually walked to the end.
@@ -565,7 +576,7 @@ export async function fetchPagesUntilClean({
   }
 
   if (cursor !== null) await advanceVerifiedFetchCursor(client, stateName, cursor);
-  return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, cursor, verified: true };
+  return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, fanoutNotFound, cursor, verified: true };
 }
 
 /**

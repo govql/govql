@@ -39,7 +39,10 @@ import { SOURCE_NAME, fetchPagesUntilClean, fetchStateName, requestBudget, toFro
 
 const API_KEY = process.env.CONGRESS_GOV_API_KEY;
 const TARGET_CONGRESS = Number.parseInt(process.env.CONGRESS_GOV_TARGET_CONGRESS ?? '119', 10);
-const HOURLY_REQUEST_BUDGET = Number.parseInt(process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000', 10);
+// A malformed value parses to NaN, which would refuse every request; fall
+// back to the default rather than run a dead fetch.
+const parsedBudget = Number.parseInt(process.env.CONGRESS_GOV_HOURLY_REQUEST_BUDGET ?? '4000', 10);
+const HOURLY_REQUEST_BUDGET = Number.isFinite(parsedBudget) && parsedBudget > 0 ? parsedBudget : 4000;
 
 async function run() {
   if (!API_KEY) {
@@ -77,7 +80,7 @@ async function run() {
     runId = await openRun(client, 'bills_fetch', { congress: TARGET_CONGRESS, fromDateTime });
 
     const budget = requestBudget(HOURLY_REQUEST_BUDGET);
-    const { passes, pages, upserted, unchanged, fanoutSkipped, cursor, verified } = await fetchPagesUntilClean({
+    const { passes, pages, upserted, unchanged, fanoutSkipped, fanoutNotFound, cursor, verified } = await fetchPagesUntilClean({
       client,
       congress: TARGET_CONGRESS,
       apiKey: API_KEY,
@@ -102,13 +105,15 @@ async function run() {
       requests: budget.used,
       budgetExhausted: budget.exhausted,
       fanoutSkipped,
+      fanoutNotFound,
     });
     const summary =
       `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes} ` +
       `(${verified ? 'verified' : 'NOT verified — next run re-walks'}), pages: ${pages}, ` +
       `upserted: ${upserted}, unchanged: ${unchanged}, requests: ${budget.used}` +
       `${budget.exhausted ? ' (budget exhausted — resuming next tick)' : ''}` +
-      `${fanoutSkipped > 0 ? `, fan-out skipped for ${fanoutSkipped} malformed item(s)` : ''}, cursor: ${cursor ?? 'none'}`;
+      `${fanoutSkipped > 0 ? `, fan-out skipped for ${fanoutSkipped} malformed item(s)` : ''}` +
+      `${fanoutNotFound > 0 ? `, ${fanoutNotFound} sub-endpoint 404(s) stored as empty` : ''}, cursor: ${cursor ?? 'none'}`;
     if (verified) logger.info(summary);
     else logger.warn(summary);
 

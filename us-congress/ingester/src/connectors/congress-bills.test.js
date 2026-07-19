@@ -690,8 +690,9 @@ test('fetchPagesIntoRaw fan-out: a 404 sub-endpoint stores an empty payload inst
   });
 
   // The run completes — a permanently-404ing bill must not stall every bill
-  // behind it — and the 404s are named in the log.
+  // behind it — and the 404s are named in the log AND surfaced as a count.
   assert.equal(result.complete, true);
+  assert.equal(result.fanoutNotFound, 2);
   assert.equal(warnings.filter((w) => /404/.test(w)).length, 2);
 
   const rawByEndpoint = Object.fromEntries(
@@ -755,7 +756,9 @@ test('fetchPagesIntoRaw fan-out: a relative pagination.next resolves against the
   };
   const cosponsorsPageOne = {
     cosponsors: cosponsorsFixture.cosponsors,
-    pagination: { count: 4, next: '/v3/bill/119/hr/1234/cosponsors?offset=250&format=json' }, // relative, origin-safe
+    // Path-relative (the hardest form): must resolve against the URL of the
+    // page that returned it, keeping the /v3 segment intact.
+    pagination: { count: 4, next: 'cosponsors?offset=250&format=json' },
   };
   const { fetchImpl } = routedFetch((pathname, searchParams) => {
     if (pathname === '/v3/bill/119') return page;
@@ -801,6 +804,13 @@ test('fetchPagesUntilClean surfaces the aggregated fan-out skip count', async ()
     client, congress: 119, apiKey: 'k', fetchImpl, fanout: {}, log: () => {},
   });
   assert.equal(result.fanoutSkipped, 1);
+  assert.equal(result.fanoutNotFound, 0);
+});
+
+test('requestBudget with a NaN limit refuses AND latches exhausted (a malformed env var must not report dead runs as verified)', () => {
+  const budget = requestBudget(Number.parseInt('', 10)); // NaN — e.g. env var set but empty
+  assert.equal(budget.has(1), false);
+  assert.equal(budget.exhausted, true);
 });
 
 test('transformDetail maps a null detail payload (stored for a 404) to all-null enrichment, not a transform reject', () => {

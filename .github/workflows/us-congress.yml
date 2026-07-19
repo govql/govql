@@ -196,6 +196,14 @@ jobs:
         run: cd us-congress/deploy && npm ci && npm test
       - name: Ingester tests
         run: cd us-congress/ingester && npm ci && npm test
+      # The pg-integration suite pins guarantees that live in Postgres
+      # semantics (jsonb changed-check resume behavior, COALESCE no-op
+      # guards) — it self-skips under plain `npm test`, so it must be run
+      # explicitly. The runner spins up a throwaway dockerized Postgres
+      # migrated with the real Flyway migrations (Docker ships on the
+      # ubuntu runners).
+      - name: Ingester pg integration tests
+        run: cd us-congress/ingester && npm run test:integration
 
   # Announce that a deploy is waiting for its one-click approval. Runs outside
   # the production environment — a job inside it would itself wait on the
