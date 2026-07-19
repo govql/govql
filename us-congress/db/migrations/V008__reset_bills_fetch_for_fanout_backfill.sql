@@ -15,6 +15,14 @@
 -- domain tables are untouched), the bills load is idempotent, and the load
 -- cursor is deliberately kept — re-fetched rows land with fresh fetched_at
 -- values ahead of it.
+--
+-- Apply via the normal deploy (compose up runs Flyway alongside the new
+-- ingester image). Do NOT apply manually while a pre-fan-out ingester is
+-- still live: its next hourly tick would rebuild the list payloads without
+-- fan-out, and the new code would then see every bill as unchanged. The
+-- fetch stage's has-detail backstop (fan out any listed bill missing its
+-- bill-detail raw) softens that window, but only for bills a later walk
+-- actually lists — deploy order is still the guarantee.
 
 DELETE FROM raw_payloads
 WHERE source_name = 'congress-bills' AND endpoint = 'bill-list';

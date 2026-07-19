@@ -6,8 +6,8 @@
  * implementer of the connector contract (see CONNECTORS.md) — unlike the
  * scraped file sources, this stage writes its own cursors in source_state
  * (keyed per congress): the `fetch` resume cursor is the max consumed
- * updateDate, advanced inside the same transaction as each committed page, so
- * a kill mid-backfill resumes from the last committed page; backfill is this
+ * updateDate, advanced inside the same transaction as each committed chunk, so
+ * a kill mid-backfill resumes from the last committed chunk; backfill is this
  * same code with a NULL starting cursor. Whenever the catch-up pass was
  * multi-page, was truncated, or the resume cursor sits ahead of the
  * `fetch_verified` cursor (an earlier run's verification crashed or capped),
@@ -77,7 +77,7 @@ async function run() {
     runId = await openRun(client, 'bills_fetch', { congress: TARGET_CONGRESS, fromDateTime });
 
     const budget = requestBudget(HOURLY_REQUEST_BUDGET);
-    const { passes, pages, upserted, unchanged, cursor, verified } = await fetchPagesUntilClean({
+    const { passes, pages, upserted, unchanged, fanoutSkipped, cursor, verified } = await fetchPagesUntilClean({
       client,
       congress: TARGET_CONGRESS,
       apiKey: API_KEY,
@@ -101,12 +101,14 @@ async function run() {
       passes,
       requests: budget.used,
       budgetExhausted: budget.exhausted,
+      fanoutSkipped,
     });
     const summary =
       `Bills fetch complete — congress ${TARGET_CONGRESS}, passes: ${passes} ` +
       `(${verified ? 'verified' : 'NOT verified — next run re-walks'}), pages: ${pages}, ` +
       `upserted: ${upserted}, unchanged: ${unchanged}, requests: ${budget.used}` +
-      `${budget.exhausted ? ' (budget exhausted — resuming next tick)' : ''}, cursor: ${cursor ?? 'none'}`;
+      `${budget.exhausted ? ' (budget exhausted — resuming next tick)' : ''}` +
+      `${fanoutSkipped > 0 ? `, fan-out skipped for ${fanoutSkipped} malformed item(s)` : ''}, cursor: ${cursor ?? 'none'}`;
     if (verified) logger.info(summary);
     else logger.warn(summary);
 

@@ -189,9 +189,10 @@ function routedFetch(routes) {
 
 // Stub for the fan-out's read-only changed check (phase 1, outside the
 // transaction): `changedKeys` names the bills whose stored list payload
-// differs (or is absent) — everything else reports unchanged.
-function changedCheckResponse(params, changedKeys) {
-  return { rows: [{ changed: changedKeys.includes(params[1]) }], rowCount: 1 };
+// differs (or is absent) — everything else reports unchanged with its
+// bill-detail raw present (no has-detail backstop trigger).
+function changedCheckResponse(params, changedKeys, { hasDetail = true } = {}) {
+  return { rows: [{ changed: changedKeys.includes(params[1]), has_detail: hasDetail }], rowCount: 1 };
 }
 const CHANGED_CHECK_RE = /SELECT \(payload IS DISTINCT FROM/i;
 
@@ -574,6 +575,9 @@ test('loadStaleSummaryRaws replaces a bill\'s summaries per bill', async () => {
   assert.deepEqual(result, { processed: 1, failed: 0, skippedMissingBill: 0, maxFetchedAt: '2026-07-16T09:30:00.000001Z' });
 
   assert.equal(client.calls[0].params[1], 'bill-summaries');
+  // Summaries payloads carry full CRS text under a 64 MB heap cap — the
+  // batch size must stay small (an OOM here is a crash loop).
+  assert.equal(client.calls[0].params[3], 50);
   const del = client.calls.find((c) => /DELETE FROM bill_summaries/i.test(c.text));
   assert.deepEqual(del.params, ['hr1234-119']);
   const insert = client.calls.find((c) => /INSERT INTO bill_summaries/i.test(c.text));
@@ -607,11 +611,13 @@ test('loadStaleDetailRaws enriches the bills row via COALESCE — a populated co
   const update = client.calls.find((c) => /UPDATE bills/i.test(c.text));
   // Every enrichment column falls back to its current value when the
   // endpoint omitted the field — the no-NULL-overwrite rule.
-  assert.match(update.text, /sponsor_bioguide_id = COALESCE\(\$2, sponsor_bioguide_id\)/i);
-  assert.match(update.text, /introduced_at\s+= COALESCE\(\$3, introduced_at\)/i);
-  assert.match(update.text, /policy_area\s+= COALESCE\(\$4, policy_area\)/i);
-  assert.match(update.text, /enacted_as_law_type = COALESCE\(\$5, enacted_as_law_type\)/i);
-  assert.match(update.text, /enacted_as_number\s+= COALESCE\(\$6, enacted_as_number\)/i);
+  assert.match(update.text, /sponsor_bioguide_id = COALESCE\(\$2::text, sponsor_bioguide_id\)/i);
+  assert.match(update.text, /introduced_at\s+= COALESCE\(\$3::date, introduced_at\)/i);
+  assert.match(update.text, /policy_area\s+= COALESCE\(\$4::text, policy_area\)/i);
+  assert.match(update.text, /enacted_as_law_type = COALESCE\(\$5::text, enacted_as_law_type\)/i);
+  assert.match(update.text, /enacted_as_number\s+= COALESCE\(\$6::text, enacted_as_number\)/i);
+  // The no-op guard: updated_at must not be bumped unless some value changes.
+  assert.match(update.text, /\$2::text IS NOT NULL AND \$2::text IS DISTINCT FROM sponsor_bioguide_id/i);
   assert.deepEqual(update.params, ['hr1234-119', 'B001319', '2025-01-06', 'Immigration', 'Public Law', '119-1']);
 });
 
@@ -657,9 +663,9 @@ test('loadStaleTitleRaws enriches the title columns via COALESCE from the titles
 
   assert.equal(client.calls[0].params[1], 'bill-titles');
   const update = client.calls.find((c) => /UPDATE bills/i.test(c.text));
-  assert.match(update.text, /official_title = COALESCE\(\$2, official_title\)/i);
-  assert.match(update.text, /short_title\s+= COALESCE\(\$3, short_title\)/i);
-  assert.match(update.text, /popular_title\s+= COALESCE\(\$4, popular_title\)/i);
+  assert.match(update.text, /official_title = COALESCE\(\$2::text, official_title\)/i);
+  assert.match(update.text, /short_title\s+= COALESCE\(\$3::text, short_title\)/i);
+  assert.match(update.text, /popular_title\s+= COALESCE\(\$4::text, popular_title\)/i);
   assert.deepEqual(update.params, [
     'hr1234-119',
     'A bill to require the Secretary of Homeland Security to take into custody aliens who have been charged in the United States with theft, and for other purposes.',
@@ -714,6 +720,87 @@ test('fetchPagesIntoRaw fan-out: a pagination.next URL off the API origin is ref
     /pagination\.next left the API origin/,
   );
   assert.equal(urls.some((u) => u.url.includes('evil.example.com')), false);
+});
+
+test('fetchPagesIntoRaw fan-out: a 404 on a pagination FOLLOW throws (transient fault) instead of storing an empty set over real data', async () => {
+  const page = { bills: [fixture.bills[0]], pagination: { count: 1 } };
+  const cosponsorsPageOne = {
+    cosponsors: cosponsorsFixture.cosponsors,
+    pagination: { count: 300, next: 'https://api.congress.gov/v3/bill/119/hr/1234/cosponsors?offset=250&format=json' },
+  };
+  const { fetchImpl } = routedFetch((pathname, searchParams) => {
+    if (pathname === '/v3/bill/119') return page;
+    if (pathname === '/v3/bill/119/hr/1234/cosponsors') {
+      return searchParams.get('offset') === '250' ? null : cosponsorsPageOne; // page 2 → 404
+    }
+    return billSubEndpointRoutes(pathname);
+  });
+  const client = stubClient();
+
+  // Page one proved the endpoint exists; a 404 mid-pagination must fail the
+  // run (retried next tick) — storing {cosponsors: []} here would make the
+  // load DELETE the bill's real rows with nothing to ever re-trigger a fetch.
+  await assert.rejects(
+    () => fetchPagesIntoRaw({ client, congress: 119, apiKey: 'k', fetchImpl, fanout: {} }),
+    /bill-cosponsors request failed with HTTP 404/,
+  );
+  assert.equal(client.calls.some((c) => /INSERT INTO raw_payloads/i.test(c.text)), false);
+});
+
+test('fetchPagesIntoRaw fan-out: a relative pagination.next resolves against the base URL and is followed', async () => {
+  const page = { bills: [fixture.bills[0]], pagination: { count: 1 } };
+  const cosponsorsPageTwo = {
+    cosponsors: [{ bioguideId: 'D000096', isOriginalCosponsor: false, sponsorshipDate: '2025-03-15' }],
+    pagination: { count: 4 },
+  };
+  const cosponsorsPageOne = {
+    cosponsors: cosponsorsFixture.cosponsors,
+    pagination: { count: 4, next: '/v3/bill/119/hr/1234/cosponsors?offset=250&format=json' }, // relative, origin-safe
+  };
+  const { fetchImpl } = routedFetch((pathname, searchParams) => {
+    if (pathname === '/v3/bill/119') return page;
+    if (pathname === '/v3/bill/119/hr/1234/cosponsors') {
+      return searchParams.get('offset') === '250' ? cosponsorsPageTwo : cosponsorsPageOne;
+    }
+    return billSubEndpointRoutes(pathname);
+  });
+  const client = stubClient();
+
+  await fetchPagesIntoRaw({ client, congress: 119, apiKey: 'k', fetchImpl, fanout: {} });
+  const cosponsorsRaw = client.calls.find((c) =>
+    /INSERT INTO raw_payloads/i.test(c.text) && c.params[2] === 'bill-cosponsors');
+  assert.deepEqual(JSON.parse(cosponsorsRaw.params[3]), {
+    cosponsors: [...cosponsorsFixture.cosponsors, ...cosponsorsPageTwo.cosponsors],
+  });
+});
+
+test('fetchPagesIntoRaw fan-out: a bill with no bill-detail raw fans out even when its list payload is unchanged (self-healing backstop)', async () => {
+  const page = { bills: [fixture.bills[0]], pagination: { count: 1 } };
+  const { urls, fetchImpl } = routedFetch((pathname) =>
+    pathname === '/v3/bill/119' ? page : billSubEndpointRoutes(pathname));
+  // List payload unchanged, but the detail raw is missing — e.g. the list row
+  // landed via a pre-fan-out ingester after the V008 reset.
+  const client = stubClient((text, params) => {
+    if (CHANGED_CHECK_RE.test(text)) return changedCheckResponse(params, [], { hasDetail: false });
+    if (/INSERT INTO raw_payloads/i.test(text) && params[2] === 'bill-list') return { rows: [], rowCount: 0 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await fetchPagesIntoRaw({ client, congress: 119, apiKey: 'k', fetchImpl, fanout: {} });
+  assert.equal(result.unchanged, 1);   // the list row itself didn't change
+  assert.equal(urls.length, 6);        // but all five sub-endpoints were fetched
+});
+
+test('fetchPagesUntilClean surfaces the aggregated fan-out skip count', async () => {
+  const malformed = { ...fixture.bills[0], type: 'AMDT' };
+  const page = { bills: [malformed], pagination: { count: 1 } };
+  const { fetchImpl } = routedFetch((pathname) => (pathname === '/v3/bill/119' ? page : null));
+  const client = cursorAwareClient({ resume: null, verified: null });
+
+  const result = await fetchPagesUntilClean({
+    client, congress: 119, apiKey: 'k', fetchImpl, fanout: {}, log: () => {},
+  });
+  assert.equal(result.fanoutSkipped, 1);
 });
 
 test('transformDetail maps a null detail payload (stored for a 404) to all-null enrichment, not a transform reject', () => {

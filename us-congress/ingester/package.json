@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "test:integration": "sh scripts/run-pg-integration-tests.sh",
     "generate-pipeline-docs": "node scripts/generate-pipeline-docs.mjs",
     "check-pipeline-docs": "node scripts/generate-pipeline-docs.mjs --check"
   },

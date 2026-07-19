@@ -54,9 +54,9 @@ Staged cursors live in `source_state` (see the master plan's "Staged cursors" an
   retargeting the config knob starts a fresh backfill instead of filtering behind
   another unit's watermark):
   - `fetch` — the **resume** position: the max consumed source watermark (bills: max
-    `updateDate`), advanced **in the same transaction as each committed page** of raw
+    `updateDate`), advanced **in the same transaction as each committed chunk** of raw
     payloads and **monotonic** (never regresses), so a crash resumes from the last
-    committed page and a verification re-walk can't rewind it. Backfill is the same
+    committed chunk and a verification re-walk can't rewind it. Backfill is the same
     code with a NULL starting cursor.
   - `fetch_verified` — the **verified-through** position: advanced only after a clean
     verification pass (below). A crash or pass-cap leaves it behind, and the next run
@@ -114,7 +114,11 @@ Postgres microsecond timestamps"); read them with `readCursor` and compare as st
 
 1. Migration for any new tables/columns (`db/migrations/Vnnn__…`; keep DDL parseable —
    see AGENTS.md).
-2. Connector module under `src/connectors/`, with fixture-driven tests beside it.
+2. Connector module under `src/connectors/`, with fixture-driven tests beside it. A
+   guarantee that lives in Postgres semantics (jsonb comparison, COALESCE no-ops) goes
+   in a `*.pg-integration.test.js` sibling instead — `npm run test:integration` runs
+   those against a throwaway dockerized Postgres migrated with the real migrations;
+   they skip themselves under plain `npm test`.
 3. Thin entry script(s) in `src/`, mirroring `fetch-bills.js` / `ingest-bills.js`.
 4. Crontab entries + manifest nodes + regenerated `PIPELINE.md` — the add-a-source
    ritual in AGENTS.md ("Ingestion pipeline manifest & docs"); `npm test` fails on

@@ -357,12 +357,14 @@ function parseSchema(sql) {
     t.columns.push(...parseColumns(m[2]));
   }
 
-  // COMMENT ON TABLE — both plain 'text' and E'escape\ntext' forms
+  // COMMENT ON TABLE — both plain 'text' and E'escape\ntext' forms.
+  // SQL escapes an embedded single quote by doubling it ('') — unescape so
+  // the published docs don't render the doubled form literally.
   const tblCmtRe = /COMMENT ON TABLE (\w+) IS E?'([\s\S]*?)';/g;
   for (const m of sql.matchAll(tblCmtRe)) {
     const t = tables[m[1]];
     if (!t) continue;
-    const raw = m[2].replace(/\\n/g, '\n');
+    const raw = m[2].replace(/\\n/g, '\n').replace(/''/g, "'");
     t.omit = raw.includes('@omit');
     t.comment = raw.replace(/@omit\s*/g, '').trim();
   }
@@ -372,7 +374,7 @@ function parseSchema(sql) {
   for (const m of sql.matchAll(colCmtRe)) {
     const t = tables[m[1]];
     if (!t) continue;
-    const raw = m[3].replace(/\\n/g, '\n');
+    const raw = m[3].replace(/\\n/g, '\n').replace(/''/g, "'");
     const nameOverride = raw.match(/@name\s+(\w+)/)?.[1] ?? null;
     const comment = raw.replace(/@\w+[^\n]*\n?/, '').trim();
 

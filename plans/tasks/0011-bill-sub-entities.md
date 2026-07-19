@@ -121,6 +121,23 @@ parked separately in issue #91 — not this task.
   over sanitize); PLAN.md rate-budget paragraph kept (user chose to promote
   it to a durable decision); error-asymmetry + omitted-fields tests added.
   95 tests green.
+- 2026-07-18 (review round 2): applied 10 of the 11 residual findings with
+  user approval (skipped only the branch-naming process note). Highlights:
+  a 404 mid-pagination now fails the run instead of storing an empty set
+  over real child rows (404-as-empty is first-request-only); pagination.next
+  resolves relative URLs against the base before the origin check; the
+  changed-check gained a has-detail backstop (a listed bill missing its
+  bill-detail raw fans out even if its list payload is unchanged) plus a
+  deploy-order note in V008; summaries loader batch dropped to 50 under the
+  64 MB heap; detail/titles UPDATEs got a no-op WHERE guard so updated_at
+  never bumps without a change (explicit ::text/::date casts — real Postgres
+  rejected the guard without them); fanoutSkipped now surfaces in the run
+  summary and outcome; stale "committed page" wording fixed; docs generator
+  unescapes SQL doubled quotes; NEW `npm run test:integration` runs
+  *.pg-integration.test.js against a throwaway dockerized Postgres migrated
+  with the real migrations — it pins the jsonb changed-check (reordered-key
+  payload does not re-fan-out) and COALESCE/updated_at semantics, and its
+  first run caught the cast bug. 99 stub tests + 2 pg tests green.
 - Decisions made in-flight (no [decision] items were open): rate strategy =
   clean bail-out (documented); fan-out chunk size 25; one load cursor spans all
   six endpoints (each loader drains its endpoint's backlog, so the shared

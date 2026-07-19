@@ -196,27 +196,33 @@ export const REQUEST_TIMEOUT_MS = 30_000;
  * never truncated mid-merge, so the overrun past a refused check is bounded
  * by one bill's pagination.
  *
- * A 404 is stored as the endpoint's EMPTY payload (`onNotFound` lets the
- * caller count and log it): Congress.gov persistently 404s some sub-endpoints
- * for real bills, and throwing would replay the same bill every hour and
- * wedge the pipeline behind it forever — the same reasoning as the
- * malformed-item skip in fanoutPath. Every other non-OK status still throws:
- * transient failures are retried by the next run from the committed cursor.
+ * A 404 on the endpoint's FIRST request is stored as its EMPTY payload
+ * (`onNotFound` lets the caller count and log it): Congress.gov persistently
+ * 404s some sub-endpoints for real bills, and throwing would replay the same
+ * bill every hour and wedge the pipeline behind it forever — the same
+ * reasoning as the malformed-item skip in fanoutPath. A 404 on a pagination
+ * FOLLOW throws like every other non-OK status: the endpoint demonstrably
+ * exists (page one answered), so a mid-pagination 404 is a transient fault —
+ * storing empty there would discard the pages already fetched, and the load
+ * side would DELETE the bill's real child rows with nothing to re-trigger a
+ * fetch. Transient failures are retried by the next run from the committed
+ * cursor.
  *
- * pagination.next is response data; it is followed only when it stays on the
- * configured API origin, because the request carries the API key header and
- * a hostile/mangled absolute URL must not exfiltrate it (or aim the ingester
+ * pagination.next is response data; it is resolved against the configured
+ * base URL (the API may emit relative next links) and followed only when it
+ * stays on that origin, because the request carries the API key header and a
+ * hostile/mangled absolute URL must not exfiltrate it (or aim the ingester
  * at an arbitrary host).
  */
 async function fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetchImpl, budget, onNotFound = () => {} }) {
   const empty = () => (descriptor.single ? null : descriptor.merge([], null));
-  const request = async (url) => {
+  const request = async (url, { notFoundIsEmpty }) => {
     budget?.take(1);
     const response = await fetchImpl(url, {
       headers: { 'X-Api-Key': apiKey },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (response.status === 404) {
+    if (response.status === 404 && notFoundIsEmpty) {
       onNotFound(descriptor.endpoint);
       return null;
     }
@@ -229,26 +235,27 @@ async function fetchSubEndpoint({ descriptor, path, apiKey, baseUrl, limit, fetc
   };
 
   if (descriptor.single) {
-    const page = await request(`${baseUrl}${path}${descriptor.suffix}?format=json`);
+    const page = await request(`${baseUrl}${path}${descriptor.suffix}?format=json`, { notFoundIsEmpty: true });
     return page === null ? empty() : descriptor.single(page);
   }
 
   const items = [];
   let firstPage = null;
   let url = `${baseUrl}${path}${descriptor.suffix}?format=json&limit=${limit}`;
-  for (;;) {
-    const page = await request(url);
+  for (let first = true; ; first = false) {
+    const page = await request(url, { notFoundIsEmpty: first });
     if (page === null) return empty();
     firstPage ??= page;
     items.push(...descriptor.items(page));
     const next = page.pagination?.next;
     if (!next) break;
-    if (new URL(next).origin !== new URL(baseUrl).origin) {
+    const resolved = new URL(next, baseUrl);
+    if (resolved.origin !== new URL(baseUrl).origin) {
       throw new Error(
         `Congress.gov ${descriptor.endpoint} pagination.next left the API origin — refusing to follow it`,
       );
     }
-    url = next;
+    url = resolved.toString();
   }
   return descriptor.merge(items, firstPage);
 }
@@ -367,13 +374,22 @@ export async function fetchPagesIntoRaw({
         const key = naturalKey(item);
         let subPayloads = null;
         if (fanout) {
+          // Changed = the stored list payload differs (or is absent) — OR the
+          // bill has no bill-detail raw at all. The has-detail backstop makes
+          // the fan-out self-healing for a bill whose list row landed without
+          // its sub-entities (e.g. a pre-fan-out ingester re-walked after the
+          // V008 reset): whenever the walk lists such a bill, it fans out.
           const { rows } = await client.query(
-            `SELECT (payload IS DISTINCT FROM $4::jsonb) AS changed
+            `SELECT (payload IS DISTINCT FROM $4::jsonb) AS changed,
+                    EXISTS (
+                      SELECT 1 FROM raw_payloads d
+                      WHERE d.source_name = $1 AND d.natural_key = $2 AND d.endpoint = $5
+                    ) AS has_detail
              FROM raw_payloads
              WHERE source_name = $1 AND natural_key = $2 AND endpoint = $3`,
-            [SOURCE_NAME, key, LIST_ENDPOINT, JSON.stringify(item)],
+            [SOURCE_NAME, key, LIST_ENDPOINT, JSON.stringify(item), DETAIL_ENDPOINT],
           );
-          const changed = rows.length === 0 || rows[0].changed === true;
+          const changed = rows.length === 0 || rows[0].changed === true || rows[0].has_detail === false;
           if (changed) {
             const path = fanoutPath(item);
             if (path === null) {
@@ -436,13 +452,14 @@ export async function fetchPagesIntoRaw({
   return { pages, upserted, unchanged, fanoutSkipped, cursor, complete };
 }
 
+
 /**
  * Fetch with crash-safe skip-proofing, built on two source_state watermarks
  * per congress:
  *
  *  - `fetch` — the RESUME position: max consumed updateDate, advanced per
- *    committed page (monotonic), so a kill mid-walk resumes from the last
- *    committed page.
+ *    committed chunk (monotonic), so a kill mid-walk resumes from the last
+ *    committed chunk.
  *  - `fetch_verified` — the VERIFIED-THROUGH position: advanced only after a
  *    clean verification pass, i.e. a re-walk that wrote nothing new.
  *
@@ -482,6 +499,7 @@ export async function fetchPagesUntilClean({
   let passes = 0;
   let pages = 0;
   let unchanged = 0;
+  let fanoutSkipped = 0;
   let cursor = resume;
 
   const runPass = async (anchor) => {
@@ -504,6 +522,7 @@ export async function fetchPagesUntilClean({
     });
     pages += result.pages;
     unchanged += result.unchanged;
+    fanoutSkipped += result.fanoutSkipped;
     // Merge only a real advance: a pass that fetched nothing echoes its anchor
     // back in truncated API format, and comparing that against the
     // full-precision cursor string would clobber it (lexically 'Z' > '.').
@@ -530,14 +549,14 @@ export async function fetchPagesUntilClean({
         `Bills fetch stopped at the request budget (${budget.used} requests) — ` +
         `verification deferred; the next run resumes from the committed cursors`,
       );
-      return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: false };
+      return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, cursor, verified: false };
     }
     if (passes >= maxPasses) {
       log(
         `Bills fetch verification did not converge after ${passes} passes — ` +
         `the verified cursor stays behind and the next run resumes verification from it`,
       );
-      return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: false };
+      return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, cursor, verified: false };
     }
     const pass = await runPass(verified);
     // Clean = the pass wrote nothing new AND actually walked to the end.
@@ -546,7 +565,7 @@ export async function fetchPagesUntilClean({
   }
 
   if (cursor !== null) await advanceVerifiedFetchCursor(client, stateName, cursor);
-  return { passes, pages, upserted: upsertedKeys.size, unchanged, cursor, verified: true };
+  return { passes, pages, upserted: upsertedKeys.size, unchanged, fanoutSkipped, cursor, verified: true };
 }
 
 /**
@@ -880,7 +899,12 @@ async function applySummaries({ client, billId, data: rows }) {
   }
 }
 
-export async function loadStaleSummaryRaws({ client, loadCursor, batchSize = 500, log = console.error }) {
+// Summaries payloads carry every version's complete CRS text (tens to
+// hundreds of KB each once jsonb parses into JS), and the ingester runs under
+// a 64 MB heap cap — a 500-row batch of them can OOM, and an OOM here is a
+// crash loop (the unadvanced cursor re-reads the same batch every run). The
+// other loaders' payloads are small; only summaries needs the smaller batch.
+export async function loadStaleSummaryRaws({ client, loadCursor, batchSize = 50, log = console.error }) {
   return loadStaleEndpointRaws({
     client,
     endpoint: SUMMARIES_ENDPOINT,
@@ -907,15 +931,27 @@ async function applyDetail({ client, billId, data, log }) {
       sponsor = null;
     }
   }
+  // The WHERE guard keeps the row (and its updated_at) untouched when no
+  // COALESCE would change anything — an all-null enrichment (404'd detail)
+  // or a re-read of an unchanged payload must not fake a modification for
+  // updated_at consumers.
+  // Params are cast explicitly: each appears in both a COALESCE and the
+  // guard, and Postgres cannot resolve an unknown-typed parameter used in
+  // multiple expression contexts (verified by the pg-integration suite).
   await client.query(
     `UPDATE bills SET
-       sponsor_bioguide_id = COALESCE($2, sponsor_bioguide_id),
-       introduced_at       = COALESCE($3, introduced_at),
-       policy_area         = COALESCE($4, policy_area),
-       enacted_as_law_type = COALESCE($5, enacted_as_law_type),
-       enacted_as_number   = COALESCE($6, enacted_as_number),
+       sponsor_bioguide_id = COALESCE($2::text, sponsor_bioguide_id),
+       introduced_at       = COALESCE($3::date, introduced_at),
+       policy_area         = COALESCE($4::text, policy_area),
+       enacted_as_law_type = COALESCE($5::text, enacted_as_law_type),
+       enacted_as_number   = COALESCE($6::text, enacted_as_number),
        updated_at          = now()
-     WHERE bill_id = $1`,
+     WHERE bill_id = $1
+       AND (($2::text IS NOT NULL AND $2::text IS DISTINCT FROM sponsor_bioguide_id)
+         OR ($3::date IS NOT NULL AND $3::date IS DISTINCT FROM introduced_at)
+         OR ($4::text IS NOT NULL AND $4::text IS DISTINCT FROM policy_area)
+         OR ($5::text IS NOT NULL AND $5::text IS DISTINCT FROM enacted_as_law_type)
+         OR ($6::text IS NOT NULL AND $6::text IS DISTINCT FROM enacted_as_number))`,
     [billId, sponsor, data.introduced_at, data.policy_area, data.enacted_as_law_type, data.enacted_as_number],
   );
 }
@@ -938,13 +974,18 @@ export async function loadStaleDetailRaws({ client, loadCursor, batchSize = 500,
  * enrichment so an absent family never NULLs a populated column.
  */
 async function applyTitles({ client, billId, data }) {
+  // Same no-op guard (and explicit casts) as applyDetail: never bump
+  // updated_at without a change.
   await client.query(
     `UPDATE bills SET
-       official_title = COALESCE($2, official_title),
-       short_title    = COALESCE($3, short_title),
-       popular_title  = COALESCE($4, popular_title),
+       official_title = COALESCE($2::text, official_title),
+       short_title    = COALESCE($3::text, short_title),
+       popular_title  = COALESCE($4::text, popular_title),
        updated_at     = now()
-     WHERE bill_id = $1`,
+     WHERE bill_id = $1
+       AND (($2::text IS NOT NULL AND $2::text IS DISTINCT FROM official_title)
+         OR ($3::text IS NOT NULL AND $3::text IS DISTINCT FROM short_title)
+         OR ($4::text IS NOT NULL AND $4::text IS DISTINCT FROM popular_title))`,
     [billId, data.official_title, data.short_title, data.popular_title],
   );
 }
