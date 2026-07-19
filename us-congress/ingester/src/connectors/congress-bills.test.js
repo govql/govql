@@ -9,6 +9,7 @@ import {
   fetchPagesUntilClean,
   fetchStateName,
   listPages,
+  load,
   loadStaleCosponsorRaws,
   loadStaleRawsIntoBills,
   loadStaleDetailRaws,
@@ -1391,4 +1392,26 @@ test('loadStaleRawsIntoBills lets a database upsert error propagate — the curs
     () => loadStaleRawsIntoBills({ client, loadCursor: null, log: () => {} }),
     /deadlock detected/,
   );
+});
+
+test('load orchestrates the bills-list loader first, then each sub-entity loader, merging tallies and consumed watermark', async () => {
+  const client = stubClient(() => ({ rows: [], rowCount: 0 }));
+
+  const result = await load({ client, loadCursor: '2025-06-01T00:00:00.000000Z', log: { info: () => {}, warn: () => {}, error: () => {} } });
+
+  // Empty backlog: nothing processed, consumed stays at the load cursor.
+  assert.equal(result.processed, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(result.consumed, '2025-06-01T00:00:00.000000Z');
+  assert.equal(result.bills.ingested, 0);
+  assert.deepEqual(Object.keys(result.subResults), ['cosponsors', 'subjects', 'summaries', 'detail', 'titles']);
+
+  // The list loader must run before the sub-entity loaders (their rows FK on
+  // the bills row the list loader lands), each over its own endpoint backlog.
+  const endpointsQueried = client.calls
+    .filter((c) => /FROM raw_payloads/.test(c.text) && /endpoint = \$2/.test(c.text))
+    .map((c) => c.params[1]);
+  assert.deepEqual(endpointsQueried, [
+    'bill-list', 'bill-cosponsors', 'bill-subjects', 'bill-summaries', 'bill-detail', 'bill-titles',
+  ]);
 });

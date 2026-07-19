@@ -1,0 +1,55 @@
+# Trimmed fixture in the unitedstates/congress-legislators shape.
+- id:
+    bioguide: A000001
+    thomas: '01234'
+    lis: S307
+    govtrack: 400001
+    opensecrets: N00001234
+    votesmart: 53270
+    icpsr: 29389
+    cspan: 5051
+  name:
+    first: Alexandra
+    middle: Jean
+    last: Adams
+    official_full: Alexandra J. Adams
+  bio:
+    birthday: '1962-02-20'
+    gender: F
+  terms:
+    - type: sen
+      start: '2019-01-03'
+      end: '2025-01-03'
+      state: KY
+      party: Republican
+      class: 2
+      state_rank: senior
+      how: election
+      url: https://www.adams.senate.gov
+      address: 317 Russell Senate Office Building Washington DC 20510
+      phone: 202-224-0001
+    - type: sen
+      start: '2025-01-03'
+      end: '2031-01-03'
+      state: KY
+      party: Republican
+      class: 2
+      state_rank: senior
+- id:
+    bioguide: B000002
+    govtrack: 400002
+  name:
+    first: Ben
+    last: Baker
+    nickname: Benny
+  bio:
+    gender: M
+  terms:
+    - type: rep
+      start: '2023-01-03'
+      end: '2025-01-03'
+      state: FL
+      district: 12
+      party: Democrat
+      caucus: Democrat
+      how: election
