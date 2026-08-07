@@ -1163,3 +1163,38 @@ export function transform(item) {
     source_updated_at: item.updateDateIncludingText ?? item.updateDate ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// load: the load-stage orchestrator — bills first (sub-entity loaders skip
+// raws whose bills row is missing, so the list loader must land the rows
+// before they look), then each per-bill endpoint. Merges tallies and the max
+// consumed fetched_at across all six loaders. The entrypoint owns the
+// advisory lock, readiness gate, run logging, grace cap, and cursor advance
+// around this call.
+// ---------------------------------------------------------------------------
+export async function load({ client, loadCursor, log }) {
+  const bills = await loadStaleRawsIntoBills({ client, loadCursor, log: (m) => log.error(m) });
+
+  const subLoaders = [
+    ['cosponsors', loadStaleCosponsorRaws],
+    ['subjects', loadStaleSubjectRaws],
+    ['summaries', loadStaleSummaryRaws],
+    ['detail', loadStaleDetailRaws],
+    ['titles', loadStaleTitleRaws],
+  ];
+  const subResults = {};
+  let consumed = bills.maxFetchedAt;
+  let processed = bills.ingested;
+  let failed = bills.failed;
+  for (const [name, loader] of subLoaders) {
+    const result = await loader({ client, loadCursor, log: (m) => log.warn(m) });
+    subResults[name] = result;
+    processed += result.processed;
+    failed += result.failed;
+    if (consumed === null || (result.maxFetchedAt !== null && result.maxFetchedAt > consumed)) {
+      consumed = result.maxFetchedAt;
+    }
+  }
+
+  return { processed, failed, consumed, bills, subResults };
+}

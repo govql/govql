@@ -23,24 +23,130 @@ advances its least-privilege goal. Don't expand scope to solve #58 here.
 
 ## AFK tasks
 
-- [ ] Refactor `ingest-votes.js` and `ingest-legislators.js` to the connector module
+- [x] Refactor `ingest-votes.js` and `ingest-legislators.js` to the connector module
       shape, replacing bespoke plumbing with the shared helpers from 0010.
-- [ ] Where the contract needed bending to fit file-landed sources, update the
+- [x] Where the contract needed bending to fit file-landed sources, update the
       contract documentation so the next implementer inherits the fix.
-- [ ] Add a conformance check: a test asserting every load-stage module in
+- [x] Add a conformance check: a test asserting every load-stage module in
       `pipeline.manifest.js` exports the contract shape — so drift between manifest
       and modules fails the suite, matching the repo's manifest-as-source-of-truth
       idiom.
-- [ ] Keep all existing ingester tests green; update the manifest nodes only if
+- [x] Keep all existing ingester tests green; update the manifest nodes only if
       their descriptive fields (idempotency text, reads/writes) drifted, and
       regenerate `PIPELINE.md` if touched.
 
 ## Acceptance criteria
 
-- [ ] Votes and legislators ingest runs produce identical rows from identical
+- [x] Votes and legislators ingest runs produce identical rows from identical
       fixtures before and after the refactor (behavior-preserving, proven by tests)
-- [ ] All three sources (votes, legislators, bills) implement the same documented
+- [x] All three sources (votes, legislators, bills) implement the same documented
       contract; the conformance test enforces it
-- [ ] Cron schedules and `source_state` cursor semantics unchanged
-- [ ] Pipeline `--check` green in CI
+- [x] Cron schedules and `source_state` cursor semantics unchanged
+- [ ] Pipeline `--check` green in CI (green locally; CI runs on the PR)
 - [ ] PR says `Part of #89` and closes nothing
+
+## Implementation log (2026-07-19)
+
+Built on `feature/connector-contract-refactor`, commit `ad41cb2`.
+
+**What was built.** Two new connector modules extracted from the previously inline
+entry scripts, matching the shape task 0010 established for bills:
+
+- `us-congress/ingester/src/connectors/congress-votes.js` — `SOURCE_NAME`, discover
+  (`walkVoteFiles`), pure `transform` (vote row + bill stub + flattened positions;
+  keeps the category *normalisation* — unknown → `'unknown'` — rather than bills'
+  reject-the-row philosophy), per-file loaders (`needsIngestion`, `upsertBillStub`,
+  `upsertVote`, `replacePositions`, `loadVoteFile`), and a `load` orchestrator.
+- `us-congress/ingester/src/connectors/congress-legislators.js` — `SOURCE_NAME`,
+  discover (`findLegislatorFiles`), `parseLegislatorFile`, pure `transform`,
+  `upsertLegislator`, `replaceTerms`, `loadLegislator`, `load`.
+- `congress-bills.js` gained the same `load` orchestrator export (extracted verbatim
+  from `ingest-bills.js`), so all three sources share one shape.
+- All three entry scripts are now thin wiring (pool, logger, readiness gate,
+  `openRun`/`succeedRun`/`failRun`, atomic cursor advance, healthcheck, exit codes)
+  with unchanged filenames, cron lines, log messages, and cursor semantics.
+- `pipeline.manifest.js` load-stage nodes carry a `module` field;
+  `src/connectors/conformance.test.js` imports each named module and asserts
+  `SOURCE_NAME` (matching the node's watermark key), `transform`, and `load`.
+- `CONNECTORS.md` rewritten where API-first: required exports pinned (that's what the
+  conformance test asserts), file-landed sources documented as a first-class path,
+  votes' normalisation variance recorded. `AGENTS.md` manifest ritual mentions the
+  new `module` field.
+- Tests: 133 unit tests green (`npm test`), including characterization tests that pin
+  the pre-refactor SQL text/params verbatim; 4 pg-integration tests green
+  (`npm run test:integration`) proving identical rows from identical fixtures across
+  reruns (idempotency, house bioguide + senate lis_id JOIN paths, VP dropped by JOIN,
+  `--force` reprocessing). Pipeline `--check` green; `PIPELINE.md` needed no
+  regeneration (the `module` field is not rendered).
+
+**Decisions made (all AFK — the task had no `[decision]` items):**
+
+- Contract shape pinned as three required named exports: `SOURCE_NAME`, `transform`,
+  `load({ client, log, … })`. The old doc named only `SOURCE_NAME`/`transform`
+  literally; a conformance test needs concrete names, and `load` was the natural
+  third since every load-stage entry orchestrates one.
+- `log` is a logger-shaped object (`{info, warn, error}`) passed as an argument —
+  connectors stay pool-free and logger-free at import; bills' internal single-fn
+  loader logs are unchanged.
+- Known, deliberate delta: entry scripts now use the shared `succeedRun`, which
+  writes `source_params = '{}'` where the old inline SQL left NULL — audit-table
+  metadata only, domain rows identical. Also `failRun` is now `.catch()`-guarded
+  (bills convention), strictly more robust on the failure path.
+- Vote fixture member ids are disjoint from the legislators fixture ids so the two
+  pg-integration suites (which share one throwaway database and run concurrently)
+  can't collide; each suite scopes its deletes/snapshots to its own rows.
+
+**Review round 1 fixes (2026-07-19, all findings user-approved):**
+
+- Major (Bug/Spec): `transform(data)` moved inside `loadVoteFile`'s try block — a
+  malformed vote file whose flattening throws now rolls back and counts as one
+  failed file instead of crashing the run and wedging the hourly cron; pinned by a
+  new unit test (`votes: { Aye: null }` → `'failed'` + ROLLBACK).
+- Spec (equivalence proof): ran the actual pre-refactor entry scripts from `main`
+  and the refactored ones against the same dockerized, Flyway-migrated Postgres and
+  the same fixture tree (7 legislators incl. senate lis_ids, house + senate votes) —
+  domain-row snapshots (legislators, legislator_terms, votes, vote_positions, bills;
+  volatile columns excluded) were **byte-identical**. Harness:
+  scratchpad `equiv/run-equivalence.sh`; result recorded for the PR body.
+- Standards: CONNECTORS.md load-internals row no longer claims a per-file skip
+  check for legislators (votes has `needsIngestion`; legislators reprocess every
+  record each ready run); bills `load` gained a stub-client test where loaders
+  return differing non-null watermarks (consumed = max, tallies sum, null ignored);
+  conformance watermark-key check switched from an unescaped RegExp to plain
+  `includes()`; legislators failing-load test now also covers a transform throw
+  (record with id but no name → BEGIN/ROLLBACK, counted failed).
+- Deferred to PR time (not code): disclose the `source_params` NULL→`'{}'` delta in
+  the PR body; `Part of #89` / no closing keywords; post the #58 rider note after
+  approval.
+
+**Review round 2 fixes (2026-07-19, all findings user-approved):**
+
+- Standards minor: an unparseable legislators YAML file no longer fails the whole
+  run — `load` catches the parse error, logs it, counts one failure, and continues
+  with the remaining files, mirroring the votes connector's handling of an
+  unparseable data.json. This is a small **deliberate behavior change vs `main`**
+  (old code died on the file), aligning the code with CONNECTORS.md's
+  never-poisons-the-run promise; pinned by a test (bad current + good historical →
+  `{ upserted: 1, failed: 1 }`). The equivalence proof is unaffected — it exercised
+  well-formed fixtures, and this path only diverges on malformed input.
+- Standards nit: dead `silentLog()` helper removed from the legislators unit tests.
+- Spec nit: CONNECTORS.md load-internals row now states the skip paths per source
+  type — transform rejects for API sources, pre-transform guards (unparseable file,
+  missing natural id, votes' `needsIngestion` currency skip) for file sources —
+  instead of claiming transform rejects for both.
+
+**Review round 3 (2026-07-19):** the round-2 parse guard was found one case too
+narrow — a YAML file parsing to a non-array (empty → `undefined`, comments-only →
+`null`, truncated → mapping/scalar, bare string) still crashed the run via the
+per-record loop (and a bare string iterated per character). Fixed in `289eb28`:
+`parseLegislatorFile` throws on a non-array result, routing every broken-file
+shape through the existing catch; pinned by an empty-file test and verified
+empirically by the review panel (five broken shapes + one good file →
+`{ upserted: 1, failed: 5 }`, no crash). A CONNECTORS.md phrase misplacing the
+guards was loosened. Zero open findings across all lenses.
+
+**Issue #58 rider note (for the PR / a #58 comment, needs approval to post):** after
+this refactor, every `source_state` write goes through `cursor-state.js` and every
+`ingestion_runs` write through `run-log.js` — two narrow modules instead of inline
+SQL in three scripts — so a future least-privilege split can grant those tables'
+permissions to exactly those code paths.

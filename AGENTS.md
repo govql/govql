@@ -150,7 +150,9 @@ node per cron-triggered stage, `upstream[]` as the edge set — and
 `ingester/pipeline.manifest.js` using the standard fields (`id`, `stage`,
 `domain`, `upstream[]`, `reads[]`/`writes[]` with `table:`/`file:`/`external:`
 prefixes, `trigger{cron, readiness}`, `watermark{table, key, advances}`,
-`idempotency`), run `npm run generate-pipeline-docs` in `us-congress/ingester`,
+`idempotency`, and — for load-stage nodes — `module` naming the connector under
+`src/connectors/`, whose contract exports the conformance test asserts), run
+`npm run generate-pipeline-docs` in `us-congress/ingester`,
 and commit the regenerated `PIPELINE.md`. `npm run check-pipeline-docs` (also
 exercised by `npm test`) fails on drift: a crontab job with no manifest node or
 vice-versa, a referenced table missing from `db/migrations/`, or a stale

@@ -1,18 +1,18 @@
 /**
  * ingest-votes.js
  *
- * Walks the directory tree produced by `usc-run votes` and upserts every
- * roll call vote (and its individual member positions) into PostgreSQL.
- *
- * Directory structure expected under CONGRESS_DATA_DIR (default /congress):
- *   data/{congress}/votes/{session}/{chamber}{number}/data.json
- *   e.g. data/113/votes/2013/h1/data.json
+ * Thin cron entrypoint for the `congress-votes` load stage. All source logic
+ * lives in the connector module (src/connectors/congress-votes.js): discover
+ * walks the tree produced by `usc-run votes`, transform maps each data.json,
+ * and load upserts every roll call vote (and its member positions) into
+ * PostgreSQL. This script does the wiring: pool, logger, readiness gate, run
+ * logging, cursor advance, exit codes.
  *
  * Stage gate: this is the `load` stage of the fetch→load→build pipeline. It
  * runs only when the scraper's `fetch` cursor in source_state has advanced past
  * the `load` cursor (see cursor-state.js); otherwise it is a clean no-op. The
  * cron time is a soft schedule, not the correctness gate. Building the
- * precomputed aggregates is now a separate stage — see build-aggregates.js.
+ * precomputed aggregates is a separate stage — see build-aggregates.js.
  *
  * Skip logic: if the vote already exists in the DB with a source_updated_at
  * >= the file's updated_at, the file is skipped. This keeps hourly runs fast
@@ -23,266 +23,18 @@
  * than crashing the transaction). Run ingest-legislators.js first.
  */
 
-import fs from 'fs';
-import path from 'path';
 import { pool } from './db.js';
 import { logger } from './logger.js';
 import { loadReadiness, advanceLoadCursor } from './cursor-state.js';
+import { openRun, succeedRun, failRun } from './run-log.js';
+import { SOURCE_NAME, load } from './connectors/congress-votes.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
 
-// Source key for the staged fetch→load cursor handshake in source_state.
-const SOURCE_NAME = 'congress-votes';
-
 // Pass --force to reprocess vote files that are already current in the DB.
-// Useful when the ingestion logic changes (e.g. this lis_id fix).
+// Useful when the ingestion logic changes.
 const FORCE = process.argv.includes('--force');
 
-// ---------------------------------------------------------------------------
-// Valid category values per the schema CHECK constraint.
-// Falls back to 'unknown' for anything not in this set.
-// ---------------------------------------------------------------------------
-const VALID_CATEGORIES = new Set([
-  'passage', 'passage-suspension', 'amendment', 'cloture',
-  'nomination', 'treaty', 'recommit', 'quorum', 'leadership',
-  'conviction', 'veto-override', 'procedural', 'unknown',
-]);
-
-function normaliseCategory(raw) {
-  return VALID_CATEGORIES.has(raw) ? raw : 'unknown';
-}
-
-// ---------------------------------------------------------------------------
-// Directory walker
-// Yields absolute paths to every data.json found under votes/ directories.
-// ---------------------------------------------------------------------------
-async function* walkVoteFiles(dataDir) {
-  const dataPath = path.join(dataDir, 'data');
-
-  if (!fs.existsSync(dataPath)) {
-    logger.warn(`Data directory not found: ${dataPath} — nothing to ingest`);
-    return;
-  }
-
-  for (const congress of fs.readdirSync(dataPath)) {
-    // Congress numbers are directories that look like integers.
-    if (!/^\d+$/.test(congress)) continue;
-
-    const votesDir = path.join(dataPath, congress, 'votes');
-    if (!fs.existsSync(votesDir)) continue;
-
-    for (const session of fs.readdirSync(votesDir)) {
-      const sessionDir = path.join(votesDir, session);
-      if (!fs.statSync(sessionDir).isDirectory()) continue;
-
-      for (const voteDir of fs.readdirSync(sessionDir)) {
-        const dataFile = path.join(sessionDir, voteDir, 'data.json');
-        if (fs.existsSync(dataFile)) yield dataFile;
-      }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Check whether a vote needs (re-)processing.
-// Returns true if the vote is absent from the DB or has a newer updated_at.
-// ---------------------------------------------------------------------------
-async function needsIngestion(client, voteId, fileUpdatedAt) {
-  if (FORCE) return true;
-  const { rows } = await client.query(
-    `SELECT source_updated_at FROM votes WHERE vote_id = $1`,
-    [voteId],
-  );
-  if (rows.length === 0) return true;                       // not yet ingested
-  if (!rows[0].source_updated_at) return true;             // no timestamp recorded
-  if (!fileUpdatedAt) return false;                        // no upstream timestamp; skip
-  return new Date(fileUpdatedAt) > new Date(rows[0].source_updated_at);
-}
-
-// ---------------------------------------------------------------------------
-// Upsert a minimal bill stub so the vote's FK can be satisfied.
-// Full bill data (status, titles, etc.) is not available from vote files;
-// ON CONFLICT DO NOTHING avoids overwriting richer data from future sources.
-// ---------------------------------------------------------------------------
-async function upsertBillStub(client, bill) {
-  if (!bill?.bill_id || !bill?.type || bill?.number == null || !bill?.congress) return;
-
-  await client.query(
-    `INSERT INTO bills (bill_id, bill_type, bill_number, congress, official_title)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (bill_id) DO NOTHING`,
-    [
-      bill.bill_id,
-      bill.type,
-      Number(bill.number),
-      Number(bill.congress),
-      bill.title ?? null,
-    ],
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Upsert the vote record itself.
-// ---------------------------------------------------------------------------
-async function upsertVote(client, v) {
-  await client.query(
-    `INSERT INTO votes (
-       vote_id, chamber, congress, session, number, voted_at,
-       question, vote_type, category, result, result_text, requires,
-       related_bill_id, source_url, source_updated_at
-     ) VALUES (
-       $1,$2,$3,$4,$5,$6,
-       $7,$8,$9,$10,$11,$12,
-       $13,$14,$15
-     )
-     ON CONFLICT (vote_id) DO UPDATE SET
-       voted_at         = EXCLUDED.voted_at,
-       question         = EXCLUDED.question,
-       vote_type        = EXCLUDED.vote_type,
-       category         = EXCLUDED.category,
-       result           = EXCLUDED.result,
-       result_text      = EXCLUDED.result_text,
-       requires         = EXCLUDED.requires,
-       related_bill_id  = EXCLUDED.related_bill_id,
-       source_url       = EXCLUDED.source_url,
-       source_updated_at = EXCLUDED.source_updated_at`,
-    [
-      v.vote_id,
-      v.chamber,
-      v.congress,
-      String(v.session),
-      v.number,
-      v.date         ?? null,
-      v.question     ?? null,
-      v.type         ?? null,
-      normaliseCategory(v.category),
-      v.result       ?? null,
-      v.result_text  ?? null,
-      v.requires     ?? null,
-      v.bill?.bill_id ?? null,
-      v.source_url   ?? null,
-      v.updated_at   ?? null,
-    ],
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Replace vote positions.
-//
-// Positions are keyed by (vote_id, bioguide_id). We delete all existing rows
-// for this vote_id and re-insert from the file — the set of positions for a
-// historical vote doesn't change, and this avoids complex per-row diffing.
-//
-// The INSERT uses an unnest + JOIN against legislators so any bioguide_id
-// not present in the DB is silently dropped instead of throwing an FK error.
-// Unknown IDs are logged as a count for observability.
-// ---------------------------------------------------------------------------
-async function replacePositions(client, voteId, chamber, votes) {
-  // Flatten all positions into parallel arrays for unnest.
-  const memberIds = [];
-  const positions = [];
-  const parties   = [];
-  const states    = [];
-
-  for (const [positionLabel, members] of Object.entries(votes ?? {})) {
-    for (const member of members) {
-      if (!member.id) continue;
-      memberIds.push(member.id);
-      positions.push(positionLabel);
-      parties.push(member.party ?? null);
-      states.push(member.state ?? null);
-    }
-  }
-
-  if (memberIds.length === 0) return;
-
-  await client.query(
-    'DELETE FROM vote_positions WHERE vote_id = $1',
-    [voteId],
-  );
-
-  // Senate vote files identify members by lis_id (from the Senate XML);
-  // House vote files use bioguide_id directly.
-  // The JOIN silently drops any ID not present in the legislators table
-  // (VP tie-breaks, historical gaps, etc.).
-  const isSenate = chamber === 's';
-  const { rowCount } = await client.query(
-    isSenate
-      ? `INSERT INTO vote_positions (vote_id, bioguide_id, position, party, state)
-         SELECT $1, l.bioguide_id, v.position, v.party, v.state
-         FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS v(member_id, position, party, state)
-         JOIN legislators l ON l.lis_id = v.member_id`
-      : `INSERT INTO vote_positions (vote_id, bioguide_id, position, party, state)
-         SELECT $1, l.bioguide_id, v.position, v.party, v.state
-         FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS v(member_id, position, party, state)
-         JOIN legislators l ON l.bioguide_id = v.member_id`,
-    [voteId, memberIds, positions, parties, states],
-  );
-
-  const skipped = memberIds.length - rowCount;
-  if (skipped > 0) {
-    const { rows } = await client.query(
-      isSenate
-        ? `SELECT v.member_id FROM unnest($1::text[]) AS v(member_id)
-           WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.lis_id = v.member_id)`
-        : `SELECT v.member_id FROM unnest($1::text[]) AS v(member_id)
-           WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.bioguide_id = v.member_id)`,
-      [memberIds],
-    );
-    const unknownIds = rows.map(r => r.member_id);
-    logger.warn(
-      `${voteId}: ${skipped} position(s) skipped — unknown ` +
-      `${isSenate ? 'lis_id' : 'bioguide_id'}: ${unknownIds.join(', ')}`,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Process one vote file.
-// Returns 'ingested', 'skipped', or 'failed'.
-// ---------------------------------------------------------------------------
-async function processVoteFile(client, filePath) {
-  let data;
-  try {
-    data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (err) {
-    logger.error(`Failed to parse ${filePath}: ${err.message}`);
-    return 'failed';
-  }
-
-  const { vote_id, chamber, votes, bill } = data;
-  if (!vote_id) {
-    logger.warn(`No vote_id in ${filePath} — skipping`);
-    return 'failed';
-  }
-
-  if (!(await needsIngestion(client, vote_id, data.updated_at))) {
-    return 'skipped';
-  }
-
-  try {
-    await client.query('BEGIN');
-    if (bill?.bill_id) await upsertBillStub(client, bill);
-    await upsertVote(client, data);
-    await replacePositions(client, vote_id, chamber, votes);
-    await client.query('COMMIT');
-    return 'ingested';
-  } catch (err) {
-    await client.query('ROLLBACK');
-    const detail = [
-      err.message,
-      err.detail     && `detail: ${err.detail}`,
-      err.column     && `column: ${err.column}`,
-      err.constraint && `constraint: ${err.constraint}`,
-    ].filter(Boolean).join(' | ');
-    logger.error(`Failed to ingest vote ${vote_id}: ${detail}`);
-    return 'failed';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 async function run() {
   const client = await pool.connect();
   let runId;
@@ -303,23 +55,14 @@ async function run() {
       return;
     }
 
-    const { rows } = await client.query(
-      `INSERT INTO ingestion_runs (run_type, status)
-       VALUES ('votes', 'running')
-       RETURNING id`,
-    );
-    runId = rows[0].id;
+    runId = await openRun(client, 'votes');
 
-    let totalIngested = 0;
-    let totalSkipped  = 0;
-    let totalFailed   = 0;
-
-    for await (const filePath of walkVoteFiles(DATA_DIR)) {
-      const result = await processVoteFile(client, filePath);
-      if      (result === 'ingested') totalIngested++;
-      else if (result === 'skipped')  totalSkipped++;
-      else                            totalFailed++;
-    }
+    const { ingested, skipped, failed } = await load({
+      client,
+      dataDir: DATA_DIR,
+      force: FORCE,
+      log: logger,
+    });
 
     // Advance the load cursor to the captured fetch value and mark the run
     // successful atomically, in one transaction — so the cursor and the run's
@@ -329,12 +72,7 @@ async function run() {
     await client.query('BEGIN');
     try {
       await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
-      await client.query(
-        `UPDATE ingestion_runs
-         SET finished_at = now(), status = 'success', records_upserted = $1
-         WHERE id = $2`,
-        [totalIngested, runId],
-      );
+      await succeedRun(client, runId, ingested);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -342,8 +80,8 @@ async function run() {
     }
 
     logger.info(
-      `Votes ingestion complete — ingested: ${totalIngested}, ` +
-      `skipped (up to date): ${totalSkipped}, failed: ${totalFailed}`,
+      `Votes ingestion complete — ingested: ${ingested}, ` +
+      `skipped (up to date): ${skipped}, failed: ${failed}`,
     );
 
     if (process.env.HEALTHCHECK_VOTES_INGEST_URL) {
@@ -351,14 +89,7 @@ async function run() {
     }
   } catch (err) {
     logger.error(`Votes ingestion failed: ${err.message}`);
-    if (runId) {
-      await client.query(
-        `UPDATE ingestion_runs
-         SET finished_at = now(), status = 'failed', error_message = $1
-         WHERE id = $2`,
-        [err.message, runId],
-      );
-    }
+    if (runId) await failRun(client, runId, err.message).catch(() => {});
     process.exit(1);
   } finally {
     client.release();

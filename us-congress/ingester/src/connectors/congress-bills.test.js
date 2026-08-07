@@ -9,6 +9,7 @@ import {
   fetchPagesUntilClean,
   fetchStateName,
   listPages,
+  load,
   loadStaleCosponsorRaws,
   loadStaleRawsIntoBills,
   loadStaleDetailRaws,
@@ -1391,4 +1392,61 @@ test('loadStaleRawsIntoBills lets a database upsert error propagate — the curs
     () => loadStaleRawsIntoBills({ client, loadCursor: null, log: () => {} }),
     /deadlock detected/,
   );
+});
+
+test('load orchestrates the bills-list loader first, then each sub-entity loader, merging tallies and consumed watermark', async () => {
+  const client = stubClient(() => ({ rows: [], rowCount: 0 }));
+
+  const result = await load({ client, loadCursor: '2025-06-01T00:00:00.000000Z', log: { info: () => {}, warn: () => {}, error: () => {} } });
+
+  // Empty backlog: nothing processed, consumed stays at the load cursor.
+  assert.equal(result.processed, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(result.consumed, '2025-06-01T00:00:00.000000Z');
+  assert.equal(result.bills.ingested, 0);
+  assert.deepEqual(Object.keys(result.subResults), ['cosponsors', 'subjects', 'summaries', 'detail', 'titles']);
+
+  // The list loader must run before the sub-entity loaders (their rows FK on
+  // the bills row the list loader lands), each over its own endpoint backlog.
+  const endpointsQueried = client.calls
+    .filter((c) => /FROM raw_payloads/.test(c.text) && /endpoint = \$2/.test(c.text))
+    .map((c) => c.params[1]);
+  assert.deepEqual(endpointsQueried, [
+    'bill-list', 'bill-cosponsors', 'bill-subjects', 'bill-summaries', 'bill-detail', 'bill-titles',
+  ]);
+});
+
+test('load merges tallies and takes the max consumed watermark across loaders with differing non-null values', async () => {
+  // One stale bill-list raw (fetched 06-02) and one stale cosponsors raw
+  // (fetched 06-03, later); the other four endpoints have empty backlogs and
+  // report a null watermark. consumed must be the max across all six.
+  const listRaw = {
+    natural_key: 'hr1234-119',
+    payload: fixture.bills[0],
+    fetched_at: '2025-06-02T00:00:00.000000Z',
+  };
+  const cosponsorsRaw = {
+    natural_key: 'hr1234-119',
+    payload: loadFixture('bill-cosponsors.json'),
+    fetched_at: '2025-06-03T00:00:00.000000Z',
+  };
+  const client = stubClient((text, params) => {
+    if (/FROM raw_payloads/.test(text) && /endpoint = \$2/.test(text)) {
+      if (params[1] === 'bill-list') return { rows: [listRaw], rowCount: 1 };
+      if (params[1] === 'bill-cosponsors') return { rows: [cosponsorsRaw], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    }
+    if (/SELECT bill_id FROM bills/.test(text)) return { rows: [{ bill_id: 'hr1234-119' }], rowCount: 1 };
+    if (/INSERT INTO bill_cosponsors/.test(text)) return { rows: [], rowCount: 3 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  const result = await load({ client, loadCursor: null, log: { info: () => {}, warn: () => {}, error: () => {} } });
+
+  assert.equal(result.bills.ingested, 1);
+  assert.equal(result.subResults.cosponsors.processed, 1);
+  assert.equal(result.processed, 2);
+  assert.equal(result.failed, 0);
+  assert.equal(result.consumed, '2025-06-03T00:00:00.000000Z');
+  assert.equal(result.subResults.subjects.maxFetchedAt, null);
 });
