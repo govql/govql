@@ -145,7 +145,7 @@ empirically by the review panel (five broken shapes + one good file →
 `{ upserted: 1, failed: 5 }`, no crash). A CONNECTORS.md phrase misplacing the
 guards was loosened. Zero open findings across all lenses.
 
-**Issue #58 rider note (for the PR / a #58 comment, needs approval to post):** after
+**Issue #58 rider note (posted with approval: PR #99 body + https://github.com/govql/govql/issues/58#issuecomment-5219756105):** after
 this refactor, every `source_state` write goes through `cursor-state.js` and every
 `ingestion_runs` write through `run-log.js` — two narrow modules instead of inline
 SQL in three scripts — so a future least-privilege split can grant those tables'
