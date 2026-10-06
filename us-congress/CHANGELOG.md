@@ -31,7 +31,11 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 **Deprecated** (soon-to-be-removed), **Removed**, **Fixed** (bug fixes), **Security**.
 
 ## [Unreleased]
+## [2026-10-06]
 
+### Fixed
+
+- `FlywaySchemaHistory` and `allFlywaySchemaHistories` types are no longer exposed in the schema. (#66)
 ## [2026-07-19]
 
 ### Added
