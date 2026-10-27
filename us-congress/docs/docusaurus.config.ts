@@ -35,6 +35,10 @@ const config: Config = {
     locales: ['en'],
   },
 
+  stylesheets: [
+    'https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;700&display=swap',
+  ],
+
   presets: [
     [
       'classic',
@@ -192,5 +196,6 @@ const config: Config = {
     },
   } satisfies Preset.ThemeConfig,
 };
+
 
 export default config;

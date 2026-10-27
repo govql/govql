@@ -6,7 +6,7 @@
 
 /* You can override the default Infima variables here. */
 :root {
-  --ifm-heading-font-family: 'Rubik';
+  --ifm-font-family-base: 'Rubik', system-ui, -apple-system, sans-serif;
   --ifm-heading-font-weight: 300;
   --ifm-color-primary: #0a3161;
   --ifm-color-primary-dark: #092c57;
@@ -21,7 +21,6 @@
 }
 
 :root .navbar {
-  font-family: 'Rubik';
   font-weight: 300;
 }
 
