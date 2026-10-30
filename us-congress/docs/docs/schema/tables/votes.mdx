@@ -40,6 +40,8 @@ One row per roll call vote event. The vote_id is the canonical identifier from u
 | `sourceUpdatedAt` | `Datetime` |  |
 | `createdAt` | `Datetime` |  |
 | `updatedAt` | `Datetime` |  |
+| `nominationNumber` | `String` | Nomination identifier exactly as supplied by unitedstates/congress. Group related votes by (congress, nomination_number); multiple votes may reference the same nomination. NULL when absent from the source. |
+| `nominationTitle` | `String` | Nomination title supplied by unitedstates/congress. NULL when absent from the source. |
 
 ## Relationships
 

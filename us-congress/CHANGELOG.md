@@ -23,7 +23,7 @@ Internal changes (scraper/ingester plumbing, deployment, observability, docs too
 
 Because the API is versionless, we avoid breaking changes. When a field or type must change
 incompatibly, the old one is marked `@deprecated` and remains available for **at least 3 days**.
-We understand that this is an uncommonly short deprecation period, but we intend to increase it once GovQL is more full-featured/stable and/or once there are more users. 
+We understand that this is an uncommonly short deprecation period, but we intend to increase it once GovQL is more full-featured/stable and/or once there are more users.
 Planned removals are announced under `Deprecated` here before they happen and then recorded
 under `Removed`.
 
@@ -31,11 +31,19 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 **Deprecated** (soon-to-be-removed), **Removed**, **Fixed** (bug fixes), **Security**.
 
 ## [Unreleased]
+
+### Added
+
+- Vote fields `nominationNumber` and `nominationTitle` retain upstream nomination
+  references, allowing consumers to group related cloture and confirmation votes
+  by Congress and nomination identifier. Missing metadata remains `null`. (#105)
+
 ## [2026-10-06]
 
 ### Fixed
 
 - `FlywaySchemaHistory` and `allFlywaySchemaHistories` types are no longer exposed in the schema. (#66)
+
 ## [2026-07-19]
 
 ### Added
@@ -52,6 +60,7 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
   `officialTitle`/`shortTitle`/`popularTitle` columns now carry Congress.gov data for covered
   congresses, filled in over roughly a day as the per-bill backfill drip-feeds within the
   Congress.gov rate budget. (#89)
+
 ## [2026-07-17]
 
 ### Added
@@ -105,7 +114,6 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
   `agreed`, and a precomputed `agreement_rate` (`agreed / shared_votes`, sortable via
   `orderBy: AGREEMENT_RATE_DESC`). `other_party` includes the member's own party (a loyalty
   measure). Maintained incrementally by the ingester across all congresses. (#49)
-
 
 ## [2026-06-18] — Baseline
 

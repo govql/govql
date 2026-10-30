@@ -1,26 +1,16 @@
 /**
  * ingest-votes.js
  *
- * Thin cron entrypoint for the `congress-votes` load stage. All source logic
- * lives in the connector module (src/connectors/congress-votes.js): discover
- * walks the tree produced by `usc-run votes`, transform maps each data.json,
- * and load upserts every roll call vote (and its member positions) into
- * PostgreSQL. This script does the wiring: pool, logger, readiness gate, run
- * logging, cursor advance, exit codes.
+ * Thin cron entrypoint for the congress-votes load stage.
+ * The connector discovers files, transforms votes, and loads their positions.
+ * This entrypoint handles readiness, run logging, and cursor advancement.
  *
- * Stage gate: this is the `load` stage of the fetch→load→build pipeline. It
- * runs only when the scraper's `fetch` cursor in source_state has advanced past
- * the `load` cursor (see cursor-state.js); otherwise it is a clean no-op. The
- * cron time is a soft schedule, not the correctness gate. Building the
- * precomputed aggregates is a separate stage — see build-aggregates.js.
+ * Normal runs require the fetch cursor to have advanced past the load cursor
+ * and skip files whose source timestamps are already current.
  *
- * Skip logic: if the vote already exists in the DB with a source_updated_at
- * >= the file's updated_at, the file is skipped. This keeps hourly runs fast
- * after the initial historical backfill.
- *
- * FK safety: vote_positions are inserted via a JOIN against the legislators
- * table, so any bioguide_id not yet in the DB is silently dropped (rather
- * than crashing the transaction). Run ingest-legislators.js first.
+ * --force bypasses both checks to backfill changes in ingestion logic.
+ * A forced run without a fetch cursor processes available files without
+ * creating a load cursor.
  */
 
 import { pool } from './db.js';
@@ -30,9 +20,6 @@ import { openRun, succeedRun, failRun } from './run-log.js';
 import { SOURCE_NAME, load } from './connectors/congress-votes.js';
 
 const DATA_DIR = process.env.CONGRESS_DATA_DIR ?? '/congress';
-
-// Pass --force to reprocess vote files that are already current in the DB.
-// Useful when the ingestion logic changes.
 const FORCE = process.argv.includes('--force');
 
 async function run() {
@@ -40,19 +27,26 @@ async function run() {
   let runId;
 
   try {
-    // Readiness gate: run only when the scraper's fetch cursor has advanced past
-    // what we last loaded. Capture the fetch value now and advance load to exactly
-    // it on success, so the handshake — not the cron clock — is the correctness
-    // gate. A not-ready run is a clean, logged no-op (exit 0) that writes no
-    // ingestion_runs row and pings no healthcheck.
-    const { fetchCursor, loadCursor, ready } = await loadReadiness(client, SOURCE_NAME);
-    if (!ready) {
+    // Capture the exact fetch cursor before loading. Normal runs require
+    // new fetched data; forced backfills can reprocess existing files.
+    const { fetchCursor, loadCursor, ready } = await loadReadiness(
+      client,
+      SOURCE_NAME
+    );
+
+    if (!ready && !FORCE) {
       logger.info(
         `Votes ingestion skipped — fetch cursor ` +
-        `(${fetchCursor ?? 'none'}) has not advanced past load cursor ` +
-        `(${loadCursor ?? 'none'}); nothing new to load`,
+          `(${fetchCursor ?? 'none'}) has not advanced past load cursor ` +
+          `(${loadCursor ?? 'none'}); nothing new to load`
       );
       return;
+    }
+
+    if (FORCE) {
+      logger.info(
+        'Forced votes ingestion — bypassing readiness and per-file timestamp checks'
+      );
     }
 
     runId = await openRun(client, 'votes');
@@ -64,14 +58,13 @@ async function run() {
       log: logger,
     });
 
-    // Advance the load cursor to the captured fetch value and mark the run
-    // successful atomically, in one transaction — so the cursor and the run's
-    // status can never disagree. (A crash mid-walk never reaches here; a failure
-    // inside this block rolls back both, leaving the cursor unadvanced so the next
-    // run re-checks readiness and re-walks idempotently.)
+    // Record success and advance to the captured fetch cursor atomically.
+    // A forced run may have no fetch cursor; don't invent one.
     await client.query('BEGIN');
     try {
-      await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
+      if (fetchCursor !== null) {
+        await advanceLoadCursor(client, SOURCE_NAME, fetchCursor);
+      }
       await succeedRun(client, runId, ingested);
       await client.query('COMMIT');
     } catch (err) {
@@ -81,7 +74,7 @@ async function run() {
 
     logger.info(
       `Votes ingestion complete — ingested: ${ingested}, ` +
-      `skipped (up to date): ${skipped}, failed: ${failed}`,
+        `skipped (up to date): ${skipped}, failed: ${failed}`
     );
 
     if (process.env.HEALTHCHECK_VOTES_INGEST_URL) {
