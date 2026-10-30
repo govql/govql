@@ -24,9 +24,19 @@ export const SOURCE_NAME = 'congress-votes';
 // normalisation, not a transform reject: the vote is still loaded.
 // ---------------------------------------------------------------------------
 const VALID_CATEGORIES = new Set([
-  'passage', 'passage-suspension', 'amendment', 'cloture',
-  'nomination', 'treaty', 'recommit', 'quorum', 'leadership',
-  'conviction', 'veto-override', 'procedural', 'unknown',
+  'passage',
+  'passage-suspension',
+  'amendment',
+  'cloture',
+  'nomination',
+  'treaty',
+  'recommit',
+  'quorum',
+  'leadership',
+  'conviction',
+  'veto-override',
+  'procedural',
+  'unknown',
 ]);
 
 function normaliseCategory(raw) {
@@ -113,6 +123,8 @@ export function transform(data) {
       resultText: data.result_text ?? null,
       requires: data.requires ?? null,
       relatedBillId: data.bill?.bill_id ?? null,
+      nominationNumber: data.nomination?.number ?? null,
+      nominationTitle: data.nomination?.title ?? null,
       sourceUrl: data.source_url ?? null,
       sourceUpdatedAt: data.updated_at ?? null,
     },
@@ -127,15 +139,20 @@ export function transform(data) {
 // `force` reprocesses files that are already current in the DB — useful when
 // the ingestion logic changes.
 // ---------------------------------------------------------------------------
-export async function needsIngestion(client, voteId, fileUpdatedAt, { force = false } = {}) {
+export async function needsIngestion(
+  client,
+  voteId,
+  fileUpdatedAt,
+  { force = false } = {}
+) {
   if (force) return true;
   const { rows } = await client.query(
     `SELECT source_updated_at FROM votes WHERE vote_id = $1`,
-    [voteId],
+    [voteId]
   );
-  if (rows.length === 0) return true;                       // not yet ingested
-  if (!rows[0].source_updated_at) return true;             // no timestamp recorded
-  if (!fileUpdatedAt) return false;                        // no upstream timestamp; skip
+  if (rows.length === 0) return true; // not yet ingested
+  if (!rows[0].source_updated_at) return true; // no timestamp recorded
+  if (!fileUpdatedAt) return false; // no upstream timestamp; skip
   return new Date(fileUpdatedAt) > new Date(rows[0].source_updated_at);
 }
 
@@ -157,7 +174,7 @@ export async function upsertBillStub(client, billStub) {
       billStub.billNumber,
       billStub.congress,
       billStub.officialTitle,
-    ],
+    ]
   );
 }
 
@@ -169,23 +186,27 @@ export async function upsertVote(client, vote) {
     `INSERT INTO votes (
        vote_id, chamber, congress, session, number, voted_at,
        question, vote_type, category, result, result_text, requires,
-       related_bill_id, source_url, source_updated_at
+       related_bill_id, source_url, source_updated_at,
+       nomination_number, nomination_title
      ) VALUES (
        $1,$2,$3,$4,$5,$6,
        $7,$8,$9,$10,$11,$12,
-       $13,$14,$15
+       $13,$14,$15,
+       $16,$17
      )
      ON CONFLICT (vote_id) DO UPDATE SET
-       voted_at         = EXCLUDED.voted_at,
-       question         = EXCLUDED.question,
-       vote_type        = EXCLUDED.vote_type,
-       category         = EXCLUDED.category,
-       result           = EXCLUDED.result,
-       result_text      = EXCLUDED.result_text,
-       requires         = EXCLUDED.requires,
-       related_bill_id  = EXCLUDED.related_bill_id,
-       source_url       = EXCLUDED.source_url,
-       source_updated_at = EXCLUDED.source_updated_at`,
+       voted_at          = EXCLUDED.voted_at,
+       question          = EXCLUDED.question,
+       vote_type         = EXCLUDED.vote_type,
+       category          = EXCLUDED.category,
+       result            = EXCLUDED.result,
+       result_text       = EXCLUDED.result_text,
+       requires          = EXCLUDED.requires,
+       related_bill_id   = EXCLUDED.related_bill_id,
+       source_url        = EXCLUDED.source_url,
+       source_updated_at = EXCLUDED.source_updated_at,
+       nomination_number = EXCLUDED.nomination_number,
+       nomination_title  = EXCLUDED.nomination_title`,
     [
       vote.voteId,
       vote.chamber,
@@ -202,7 +223,9 @@ export async function upsertVote(client, vote) {
       vote.relatedBillId,
       vote.sourceUrl,
       vote.sourceUpdatedAt,
-    ],
+      vote.nominationNumber,
+      vote.nominationTitle,
+    ]
   );
 }
 
@@ -218,19 +241,22 @@ export async function upsertVote(client, vote) {
 // not present in the DB is silently dropped instead of throwing an FK error.
 // Unknown IDs are logged as a count for observability.
 // ---------------------------------------------------------------------------
-export async function replacePositions(client, voteId, chamber, positionRows, { log }) {
+export async function replacePositions(
+  client,
+  voteId,
+  chamber,
+  positionRows,
+  { log }
+) {
   // Flatten into parallel arrays for unnest.
   const memberIds = positionRows.map((p) => p.memberId);
   const positions = positionRows.map((p) => p.position);
-  const parties   = positionRows.map((p) => p.party);
-  const states    = positionRows.map((p) => p.state);
+  const parties = positionRows.map((p) => p.party);
+  const states = positionRows.map((p) => p.state);
 
   if (memberIds.length === 0) return;
 
-  await client.query(
-    'DELETE FROM vote_positions WHERE vote_id = $1',
-    [voteId],
-  );
+  await client.query('DELETE FROM vote_positions WHERE vote_id = $1', [voteId]);
 
   // Senate vote files identify members by lis_id (from the Senate XML);
   // House vote files use bioguide_id directly.
@@ -247,7 +273,7 @@ export async function replacePositions(client, voteId, chamber, positionRows, { 
          SELECT $1, l.bioguide_id, v.position, v.party, v.state
          FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS v(member_id, position, party, state)
          JOIN legislators l ON l.bioguide_id = v.member_id`,
-    [voteId, memberIds, positions, parties, states],
+    [voteId, memberIds, positions, parties, states]
   );
 
   const skipped = memberIds.length - rowCount;
@@ -258,12 +284,12 @@ export async function replacePositions(client, voteId, chamber, positionRows, { 
            WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.lis_id = v.member_id)`
         : `SELECT v.member_id FROM unnest($1::text[]) AS v(member_id)
            WHERE NOT EXISTS (SELECT 1 FROM legislators l WHERE l.bioguide_id = v.member_id)`,
-      [memberIds],
+      [memberIds]
     );
-    const unknownIds = rows.map(r => r.member_id);
+    const unknownIds = rows.map((r) => r.member_id);
     log.warn(
       `${voteId}: ${skipped} position(s) skipped — unknown ` +
-      `${isSenate ? 'lis_id' : 'bioguide_id'}: ${unknownIds.join(', ')}`,
+        `${isSenate ? 'lis_id' : 'bioguide_id'}: ${unknownIds.join(', ')}`
     );
   }
 }
@@ -287,7 +313,9 @@ export async function loadVoteFile(client, filePath, { force = false, log }) {
     return 'failed';
   }
 
-  if (!(await needsIngestion(client, data.vote_id, data.updated_at, { force }))) {
+  if (
+    !(await needsIngestion(client, data.vote_id, data.updated_at, { force }))
+  ) {
     return 'skipped';
   }
 
@@ -299,17 +327,21 @@ export async function loadVoteFile(client, filePath, { force = false, log }) {
     const { vote, billStub, positions } = transform(data);
     await upsertBillStub(client, billStub);
     await upsertVote(client, vote);
-    await replacePositions(client, vote.voteId, vote.chamber, positions, { log });
+    await replacePositions(client, vote.voteId, vote.chamber, positions, {
+      log,
+    });
     await client.query('COMMIT');
     return 'ingested';
   } catch (err) {
     await client.query('ROLLBACK');
     const detail = [
       err.message,
-      err.detail     && `detail: ${err.detail}`,
-      err.column     && `column: ${err.column}`,
+      err.detail && `detail: ${err.detail}`,
+      err.column && `column: ${err.column}`,
       err.constraint && `constraint: ${err.constraint}`,
-    ].filter(Boolean).join(' | ');
+    ]
+      .filter(Boolean)
+      .join(' | ');
     log.error(`Failed to ingest vote ${data.vote_id}: ${detail}`);
     return 'failed';
   }
@@ -327,9 +359,9 @@ export async function load({ client, dataDir, force = false, log }) {
 
   for await (const filePath of walkVoteFiles(dataDir, { log })) {
     const result = await loadVoteFile(client, filePath, { force, log });
-    if      (result === 'ingested') ingested++;
-    else if (result === 'skipped')  skipped++;
-    else                            failed++;
+    if (result === 'ingested') ingested++;
+    else if (result === 'skipped') skipped++;
+    else failed++;
   }
 
   return { ingested, skipped, failed };

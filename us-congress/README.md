@@ -44,6 +44,7 @@ npm run start   # http://localhost:3000
 ### Backfilling historical data
 
 To backfill historical congressional data, here's a helpful bit of shell script:
+
 ```bash
 for congress in $(seq 119 -1 93); do
   echo "=== Scraping Congress $congress ==="
@@ -52,6 +53,30 @@ for congress in $(seq 119 -1 93); do
   docker exec us-congress-ingester-1 node /app/src/ingest-votes.js
 done
 ```
+
+### Reprocessing existing vote files
+
+After deploying a change to vote ingestion, reprocess stored files with:
+
+```bash
+docker exec us-congress-ingester-1 node /app/src/ingest-votes.js --force
+```
+
+Run this after the deployment has applied migrations and started the updated
+ingester. `--force` bypasses both fetch/load readiness and per-file timestamp
+checks, so it also works when the cursors are synchronized.
+
+The command processes all vote files present in the shared volume. Votes are
+upserted by `vote_id`, and their positions are replaced transactionally.
+Repeated runs do not create duplicate votes or positions. Check the completion
+log for `failed: 0`.
+
+For nomination metadata, this populates `nominationNumber` and `nominationTitle`
+from each file's structured nomination reference. Missing metadata remains
+`NULL`; identifiers are preserved exactly. Group related votes by
+`(congress, nominationNumber)`, since multiple votes can reference the same
+nomination and identifiers can recur across Congresses.
+
 ---
 
 ## Database schema & migrations
@@ -146,10 +171,12 @@ redeploying the current one differ only in the SHA you pass.
 
 1. Find the target SHA — a full 40-hex commit SHA on `main` (short SHAs, branch
    names, and tags are rejected):
+
    ```bash
    git log --oneline main        # find the last good commit
    git rev-parse <that-commit>   # its full 40-hex SHA
    ```
+
 2. Trigger it:
    - **UI:** Actions → **us-congress** → **Run workflow** ▾ → paste the SHA into
      `sha` → **Run workflow**.
@@ -324,11 +351,11 @@ sudo -u govql -i
 
 In your Gandi DNS settings, set the following records pointing to the droplet's IP and wait for propagation before continuing:
 
-| Type  | Name  | Value                                    |
-|-------|-------|------------------------------------------|
-| A     | @     | YOUR_DROPLET_IPV4                        |
-| AAAA  | @     | YOUR_DROPLET_IPV6                        |
-| CNAME | www   | govql.us.                                |
+| Type  | Name | Value             |
+| ----- | ---- | ----------------- |
+| A     | @    | YOUR_DROPLET_IPV4 |
+| AAAA  | @    | YOUR_DROPLET_IPV6 |
+| CNAME | www  | govql.us.         |
 
 ### 3. Clone the repo and add secrets
 
@@ -349,7 +376,7 @@ Copy your `.env.keys` file to the droplet (never commit this file):
 scp us-congress/.env.keys govql@YOUR_DROPLET_IP:/opt/govql/us-congress/.env.keys
 ```
 
-Set the Congress.gov API key (request one at https://api.congress.gov/sign-up/) so
+Set the Congress.gov API key (request one at <https://api.congress.gov/sign-up/>) so
 the hourly bills ingestion runs — without it the fetch cron logs a loud skip and
 does nothing. `CONGRESS_GOV_TARGET_CONGRESS` (default `119`) picks which congress
 to ingest, and is the backfill-depth knob. `CONGRESS_GOV_HOURLY_REQUEST_BUDGET`
