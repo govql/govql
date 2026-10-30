@@ -32,6 +32,8 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## [2026-10-30]
+
 ### Added
 
 - Vote fields `nominationNumber` and `nominationTitle` retain upstream nomination
