@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 4000
 
-CMD ["node", "server.js"]
+CMD ["node", "--experimental-loader=@opentelemetry/instrumentation/hook.mjs", "--import", "./instrumentation.js", "server.js"]

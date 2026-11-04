@@ -176,6 +176,8 @@ services:
       - REDIS_URL
       - ENABLE_GRAPHIQL
       - LOG_LEVEL
+      - OTEL_EXPORTER_OTLP_ENDPOINT
+      - OTEL_EXPORTER_OTLP_HEADERS
       # Cap the V8 heap. PostGraphile v5 is lean; 128 MB handles normal load
       # and the complexity budget prevents runaway query allocations.
       - NODE_OPTIONS=--max-old-space-size=192
