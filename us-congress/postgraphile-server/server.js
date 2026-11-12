@@ -17,6 +17,9 @@ import {
 import { pool } from './db.js';
 import { rateLimiter } from './rateLimit.js';
 import { logger } from './logger.js';
+import { trace } from '@opentelemetry/api';
+
+const tracer = trace.getTracer('server');
 
 // =============================================================================
 // Depth limit
@@ -62,20 +65,25 @@ function depthLimitRule(maxDepth) {
               fragments[def.name.value] = def;
             else if (def.kind === 'OperationDefinition') operations.push(def);
           }
-          for (const op of operations) {
-            const depth = maxDepthOfSelections(
-              op.selectionSet.selections,
-              fragments,
-            );
-            if (depth > maxDepth) {
-              context.reportError(
-                new GraphQLError(
-                  `Query depth ${depth} exceeds the limit of ${maxDepth}. ` +
-                    'Use fewer levels of nesting.',
-                ),
+          tracer.startActiveSpan('server.query.calculate_depth', (span) => {
+            for (const op of operations) {
+              const depth = maxDepthOfSelections(
+                op.selectionSet.selections,
+                fragments,
               );
+              span.setAttribute('query.depth', depth);
+              if (depth > maxDepth) {
+                span.addEvent('query.depth_limit_exceeded');
+                context.reportError(
+                  new GraphQLError(
+                    `Query depth ${depth} exceeds the limit of ${maxDepth}. ` +
+                      'Use fewer levels of nesting.',
+                  ),
+                );
+              }
             }
-          }
+            span.end();
+          });
         },
       },
     };
@@ -180,30 +188,35 @@ function complexityLimitRule(maxComplexity, estimator) {
           }
 
           const schema = context.getSchema();
-          for (const op of operations) {
-            const rootType =
-              op.operation === 'mutation'
-                ? schema.getMutationType()
-                : op.operation === 'subscription'
-                  ? schema.getSubscriptionType()
-                  : schema.getQueryType();
+          tracer.startActiveSpan('server.query.calculate_complexity', (span) => {
+            for (const op of operations) {
+              const rootType =
+                op.operation === 'mutation'
+                  ? schema.getMutationType()
+                  : op.operation === 'subscription'
+                    ? schema.getSubscriptionType()
+                    : schema.getQueryType();
 
-            const complexity = sumComplexity(
-              op.selectionSet.selections,
-              rootType,
-              fragments,
-              estimator
-            );
-
-            if (complexity > maxComplexity) {
-              context.reportError(
-                new GraphQLError(
-                  `Query complexity ${complexity} exceeds the limit of ${maxComplexity}. ` +
-                    'Use smaller page sizes or fewer nested fields.'
-                )
+              const complexity = sumComplexity(
+                op.selectionSet.selections,
+                rootType,
+                fragments,
+                estimator
               );
+
+              span.setAttribute('query.complexity', complexity);
+              if (complexity > maxComplexity) {
+                span.addEvent('query.complexity_limit_exceeded');
+                context.reportError(
+                  new GraphQLError(
+                    `Query complexity ${complexity} exceeds the limit of ${maxComplexity}. ` +
+                      'Use smaller page sizes or fewer nested fields.'
+                  )
+                );
+              }
+              span.end();
             }
-          }
+            });
         },
       },
     };
