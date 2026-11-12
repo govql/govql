@@ -19,15 +19,15 @@ RUN pip3 install --upgrade pip setuptools wheel --break-system-packages
 
 RUN mkdir -p /opt/theunitedstates.io/
 WORKDIR /opt/theunitedstates.io/
-RUN git clone https://github.com/unitedstates/congress.git
-WORKDIR /opt/theunitedstates.io/congress/
+RUN git clone https://github.com/cmphilpot/govql-congress
+WORKDIR /opt/theunitedstates.io/govql-congress/
 RUN pip3 install . --break-system-packages
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Add the congress source tree to Python's path. Use a dynamic lookup so this
 # survives Python version bumps between Debian releases.
-RUN echo "/opt/theunitedstates.io/congress/" \
+RUN echo "/opt/theunitedstates.io/govql-congress/" \
     > "$(python3 -c 'import site; print(site.getsitepackages()[0])')/congress.pth"
 
 COPY ./scraper/update-legislators.sh /usr/local/bin/update-legislators.sh

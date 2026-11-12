@@ -149,7 +149,7 @@ export const nodes = [
     stage: 'fetch',
     domain: 'legislators',
     upstream: [],
-    reads: ['external:unitedstates/congress-legislators git repo'],
+    reads: ['external:unitedstates/govql-congress git repo'],
     writes: ['file:data/legislators/*.yaml', 'table:source_state'],
     trigger: {
       cron: { file: 'scraper/scrape_cron', schedule: '0 2 * * *', match: 'update-legislators.sh' },
