@@ -7,7 +7,7 @@
 # successful sync — the producer side of the fetch→load handshake.
 set -e
 
-REPO_URL="https://github.com/cmphilpot/govql-congress"
+REPO_URL="https://github.com/unitedstates/congress-legislators.git"
 TARGET_DIR="/congress/data/legislators"
 
 if [ -d "$TARGET_DIR/.git" ]; then
