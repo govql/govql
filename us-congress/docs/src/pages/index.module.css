@@ -4,15 +4,54 @@
  */
 
 .heroBanner {
-  padding: 4rem 0;
-  text-align: center;
+  display: flex;
+  flex-wrap: wrap;
   position: relative;
   overflow: hidden;
 }
 
+/* Left third: the only part with the primary-colored hero background. */
+.heroTitle {
+  flex: 0 0 33.333%;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: left;
+  transition: flex-basis 0.3s ease;
+}
+
+/* Right two-thirds: no background of its own, so it matches the page
+   (and HomepageFeatures below) in both light and dark mode. */
+.heroFeed {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 4rem 2rem;
+}
+
+/* Feed collapsed sideways: the title widens and the feed shrinks to a
+   narrow strip holding only its expand button. */
+.feedCollapsed .heroTitle {
+  flex-basis: calc(100% - 5rem);
+}
+
+.feedCollapsed .heroFeed {
+  padding: 4rem 1rem;
+}
+
 @media screen and (max-width: 996px) {
-  .heroBanner {
+  .heroTitle,
+  .heroFeed,
+  .feedCollapsed .heroTitle {
+    flex-basis: 100%;
     padding: 2rem;
+  }
+
+  /* Stacked layout: there is no width to give back, so collapsing just
+     hides the table and leaves the button. */
+  .feedCollapsed .heroFeed {
+    padding: 1rem 2rem;
   }
 }
 
