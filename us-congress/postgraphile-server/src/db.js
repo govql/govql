@@ -16,4 +16,6 @@ export const pool = new Pool({
   idleTimeoutMillis: 30_000,
   // Fail fast if the pool is exhausted or Postgres is unreachable.
   connectionTimeoutMillis: 3_000,
+  // Time out  statement execution after 5 s
+  statement_timeout: 5_000,
 });
