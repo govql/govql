@@ -33,5 +33,5 @@ COPY docs ./docs
 RUN cd docs && npm run build
 
 # --- Stage 2: nginx serving the baked site -----------------------------------
-FROM nginx:1.27-alpine
+FROM nginx:1.30.7-alpine
 COPY --from=docs-build /build/docs/build /usr/share/nginx/html

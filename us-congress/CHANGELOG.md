@@ -32,6 +32,11 @@ Change categories: **Added** (new capabilities), **Changed** (changes to existin
 
 ## [Unreleased]
 
+## [2026-11-23]
+
+### Changed
+- Queries that take more than 5 seconds to execute in PostgreSQL now receive an error response 
+
 ## [2026-10-30]
 
 ### Added
