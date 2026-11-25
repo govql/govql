@@ -101,6 +101,12 @@ const config: Config = {
       },
       items: [
         {
+        type: 'docSidebar',
+          sidebarId: 'quickStartSidebar',
+          position: 'left',
+          label: 'Quick Start',
+        },
+        {
           type: 'docSidebar',
           sidebarId: 'sourcesSidebar',
           position: 'left',

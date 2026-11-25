@@ -1,0 +1,112 @@
+---
+# sidebar_label: Overview
+# sidebar_position: 1
+---
+
+# Quick Start
+All GovQL data is accessible via `POST` request to a single endpoint: `https://api.govql.us/graphql`
+
+## API Structure
+:::tip
+See the [API Reference](https://govql.us/docs/schema/) for a full list and documentation of types available in GovQL.
+:::
+The GovQL API has searchable data types for entities such as `Legislator` and `Bill`.
+
+Specific entries can be queried by their ID, or we can use corresponding list types such as `AllLegislators` and `AllBills` to find entries that match what we're looking for. Combining these methods allows for powerful and flexible querying across data types.
+
+We'll explore that with an example:
+
+*Which bills have most recently been introduced, and who sponsored them?*
+## Composing a Query
+You can follow along with this example in the [API Explorer](https://api.govql.us/graphql) or in your own application.
+<details>
+<summary>How to make a GovQL query with JavaScript </summary>
+```ts {2-6}
+const endpoint = "https://api.govql.us/graphql"
+const query = `
+  query MyQuery() {
+
+  }
+`
+const response = await fetch(endpoint, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ query }),
+})
+const { data, errors } = await response.json()
+```
+</details>
+We want a list of bills, so we'll query the `AllBills` type using the query `AllBillsList`.
+
+Since we're only looking for a few of the most recent bills, we'll add the optional `first` argument and set it to `5` to retrieve the first five `Bill` objects, and we'll set `orderBy` to `INTRODUCED_AT_DESC` so we get the most recent bills.
+
+```ts
+query {
+  allBillsList(first: 5, orderBy: [INTRODUCED_AT_DESC]) {
+
+  }
+}
+```
+To get our results, we need to specify which fields that we want to include. `Bill` includes the field `sponsorBioguideId`, so we'll add that to the query:
+```ts {3}
+query {
+  allBillsList(first: 5, orderBy: [INTRODUCED_AT_DESC]) {
+    sponsorBioguideId
+  }
+}
+```
+This will return a list of `Bills` that looks something like this.
+```ts
+  "data": {
+    "allBillsList": [
+      {
+        "sponsorBioguideId": "B001298",
+      },
+      {
+        "sponsorBioguideId": "A000375",
+      },
+      // ... more results
+    ]
+  }
+```
+That worked, but those of us who don't have every legislator's ID memorized will probably want more information about those bill sponsors.
+
+We could store those IDs and use them to make some additional queries, but thankfully, we don't need to. GraphQL allows us to insert nested *subqueries* directly into our original query.
+
+We can replace the `sponsorBioguideId` field with `legislatorBySponsorBioguideId` which will automatically look up the `Legislator` object corresponding to each `bioguideId`. Like before, we'll need to specify which fields we want, so we'll include the `officialFull` and `birthday` fields:
+```ts {3-6}
+query {
+  allBillsList(first: 5, orderBy: [INTRODUCED_AT_DESC]) {
+    legislatorBySponsorBioguideId {
+      officialFull
+      birthday
+    }
+  }
+}
+```
+While we're at it, let's also include the `title` of each `Bill`:
+```ts {3}
+query {
+  allBillsList(first: 5, orderBy: [INTRODUCED_AT_DESC]) {
+    title
+    legislatorBySponsorBioguideId {
+      officialFull
+      birthday
+    }
+  }
+}
+```
+Now, each `Bill` object will return with its title, along with a nested `Legislator` object for its sponsor.
+```ts
+//...
+{
+  "title": "Legislative Proxy and Absence Accommodation Resolution",
+  "legislatorBySponsorBioguideId": {
+    "officialFull": "Nikema Williams",
+    "birthday": "1978-07-30"
+  }
+},
+//...
+```

@@ -53,9 +53,13 @@ function formatDateTime(iso: string): string {
   });
 }
 
+function truncateTitle(title: string | null): string {
+  if (!title) return '—';
+  return title.length > 66 ? `${title.slice(0, 63)}...` : title;
+}
+
 interface FeedProps {
-  // Lets the parent resize its layout when the feed collapses sideways.
-  onExpandedChange?: (expanded: boolean) => void;
+  expanded: boolean;
 }
 
 const thStyle: React.CSSProperties = {
@@ -68,11 +72,10 @@ const tdStyle: React.CSSProperties = {
   padding: '0.5rem 0.75rem',
 };
 
-export default function Feed({ onExpandedChange }: FeedProps): ReactNode {
+export default function Feed({ expanded }: FeedProps): ReactNode {
   const [bills, setBills] = useState<FeedBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
     gql<{ allBillsList: FeedBill[] }>(FEED_QUERY)
@@ -85,12 +88,6 @@ export default function Feed({ onExpandedChange }: FeedProps): ReactNode {
         setLoading(false);
       });
   }, []);
-
-  function toggle() {
-    const next = !expanded;
-    setExpanded(next);
-    onExpandedChange?.(next);
-  }
 
   let body: ReactNode;
   if (loading) {
@@ -143,7 +140,9 @@ export default function Feed({ onExpandedChange }: FeedProps): ReactNode {
                 >
                   {bill.billId}
                 </td>
-                <td style={tdStyle}>{bill.title ?? '—'}</td>
+                <td style={tdStyle} title={bill.title ?? undefined}>
+                  {truncateTitle(bill.title)}
+                </td>
                 <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                   {formatDateTime(bill.updatedAt)}
                 </td>
@@ -161,32 +160,26 @@ export default function Feed({ onExpandedChange }: FeedProps): ReactNode {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '0.75rem',
-          marginBottom: expanded ? '1rem' : 0,
+          marginBottom: '1rem',
         }}
       >
-        <button
-          type="button"
-          className="button button--sm button--outline button--primary"
-          onClick={toggle}
-          aria-expanded={expanded}
-          aria-controls="feed-body"
-          aria-label={
-            expanded
-              ? 'Collapse recently updated bills'
-              : 'Expand recently updated bills'
-          }
-          title={expanded ? 'Collapse' : 'Recently updated bills'}
+        <Heading
+          as="h2"
+          style={{
+            margin: 0,
+            visibility: expanded ? 'visible' : 'hidden',
+          }}
         >
-          {expanded ? '▶' : '◀'}
-        </button>
-        {expanded && (
-          <Heading as="h2" style={{ margin: 0 }}>
-            Recently Updated Bills
-          </Heading>
-        )}
+          Recently Updated Bills
+        </Heading>
       </div>
-      {expanded && <div id="feed-body">{body}</div>}
+      <div
+        id="feed-body"
+        aria-hidden={!expanded}
+        style={{ visibility: expanded ? 'visible' : 'hidden' }}
+      >
+        {body}
+      </div>
     </div>
   );
 }
