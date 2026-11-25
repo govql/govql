@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -12,6 +12,17 @@ const Svg = require('@site/static/img/govql-social-cleaned.svg').default;
 function HomepageHeader() {
   const { siteConfig } = useDocusaurusContext();
   const [feedExpanded, setFeedExpanded] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 996px)');
+    const updateIsMobile = () => setIsMobile(mediaQuery.matches);
+
+    updateIsMobile();
+    mediaQuery.addEventListener('change', updateIsMobile);
+    return () => mediaQuery.removeEventListener('change', updateIsMobile);
+  }, []);
+
   return (
     <header
       className={clsx(styles.heroBanner, !feedExpanded && styles.feedCollapsed)}
@@ -23,7 +34,24 @@ function HomepageHeader() {
         </div>
       </div>
       <div className={styles.heroFeed}>
-        <Feed onExpandedChange={setFeedExpanded} />
+        <div className={styles.feedPanel}>
+          <Feed expanded={feedExpanded || isMobile} />
+        </div>
+        <button
+          type="button"
+          className={`${styles.feedToggle} button button--sm button--outline button--primary`}
+          onClick={() => setFeedExpanded((expanded) => !expanded)}
+          aria-expanded={feedExpanded}
+          aria-controls="feed-body"
+          aria-label={
+            feedExpanded
+              ? 'Collapse recently updated bills'
+              : 'Expand recently updated bills'
+          }
+          title={feedExpanded ? 'Collapse' : 'Recently updated bills'}
+        >
+          {feedExpanded ? '▶' : '◀'}
+        </button>
       </div>
     </header>
   );

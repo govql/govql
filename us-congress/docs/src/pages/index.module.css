@@ -7,113 +7,109 @@ header {
 }
 .heroBanner {
   padding: 0rem 0;
-  text-align: center;
   position: relative;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
   align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  isolation: isolate;
 }
 .heroBanner svg {
-  height: 20em;
+  height: 16em;
   width: 100%;
   max-width: 100%;
-  max-height: 20em;
+  max-height: 16em;
 }
 .heroTitle {
+  grid-area: 1 / 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
   min-width: 0;
+  min-height: 26rem;
+  padding: 2rem calc(2rem + min(42%, 600px)) 2rem 2rem;
+  text-align: center;
 }
 .heroTitle :global(.container) {
   width: 100%;
   max-width: none;
-  padding: 2rem;
+  padding: 1rem;
 }
 .heroFeed {
+  grid-area: 1 / 1;
+  z-index: 1;
+  justify-self: end;
+  width: min(42%, 600px);
   min-width: 0;
-  padding: 1.5rem;
+  position: relative;
+}
+.feedPanel {
+  height: 100%;
+  padding: 2rem;
   text-align: left;
   overflow: hidden;
-  align-self: stretch;
-  /* background: linear-gradient(
-    90deg,
-    var(--ifm-color-primary) 10%,
-    var(--ifm-background-surface-color) 100%
-  ); */
   background-color: var(--ifm-background-surface-color);
   border-left: 1px solid var(--ifm-color-emphasis-200);
+  transition: transform 0.35s ease;
 }
-.heroFeed table {
+.feedToggle {
+  position: absolute;
+  top: 2rem;
+  right: 2rem;
+  z-index: 2;
+}
+.feedPanel table {
   background: var(--ifm-background-surface-color);
   border-radius: 0.5rem;
 }
 
-.heroFeed h2 {
+.feedPanel h2 {
   padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
   background: var(--ifm-background-surface-color);
 }
-.feedCollapsed {
-  grid-template-columns: minmax(0, 2fr) minmax(56px, 1fr);
-}
 .subHeading {
-  padding: 1em;
-  margin: 1em;
+  padding: 0.75em;
+  margin: 0.5em 1em;
 }
 
-/* Left third: the only part with the primary-colored hero background. */
-.heroTitle {
-  flex: 0 0 33.333%;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 4rem 2rem;
-  text-align: left;
-  transition: flex-basis 0.3s ease;
-}
-
-/* Right two-thirds: no background of its own, so it matches the page
-   (and HomepageFeatures below) in both light and dark mode. */
-.heroFeed {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  padding: 4rem 2rem;
-}
-
-/* Feed collapsed sideways: the title widens and the feed shrinks to a
-   narrow strip holding only its expand button. */
-.feedCollapsed .heroTitle {
-  flex-basis: calc(100% - 5rem);
-}
-
-.feedCollapsed .heroFeed {
-  padding: 4rem 1rem;
+.feedCollapsed .feedPanel {
+  transform: translateX(calc(100% - 4rem));
 }
 
 @media screen and (max-width: 996px) {
-  .heroTitle,
-  .heroFeed,
-  .feedCollapsed .heroTitle {
-    flex-basis: 100%;
-    padding: 2rem;
-    grid-template-columns: 1fr;
+  .heroBanner {
+    grid-template-rows: auto auto;
   }
-  .heroFeed,
-  .feedCollapsed .heroFeed {
+  .heroTitle,
+  .heroFeed {
+    grid-area: auto;
+  }
+  .heroTitle {
+    min-height: 0;
+    padding: 2rem;
+    text-align: left;
+  }
+  .heroTitle :global(.container) {
+    width: 100%;
+  }
+  .heroFeed {
+    width: auto;
+  }
+  .feedPanel {
+    height: auto;
+    padding: 2rem;
     border-left: 0;
     border-top: 1px solid var(--ifm-color-emphasis-200);
+    transform: none;
+  }
+  .feedToggle {
+    display: none;
   }
   .heroBanner svg {
     height: auto;
-    max-height: 20em;
-  }
-
-  /* Stacked layout: there is no width to give back, so collapsing just
-     hides the table and leaves the button. */
-  .feedCollapsed .heroFeed {
-    padding: 1rem 2rem;
+    max-height: 16em;
   }
 }
 
