@@ -10,13 +10,52 @@ header {
   text-align: center;
   position: relative;
   overflow: hidden;
-
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  align-items: stretch;
 }
 .heroBanner svg {
   height: 20em;
-  width: 80%;
-  max-width: 80%;
+  width: 100%;
+  max-width: 100%;
   max-height: 20em;
+}
+.heroTitle {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.heroTitle :global(.container) {
+  width: 100%;
+  max-width: none;
+  padding: 2rem;
+}
+.heroFeed {
+  min-width: 0;
+  padding: 1.5rem;
+  text-align: left;
+  overflow: hidden;
+  align-self: stretch;
+  /* background: linear-gradient(
+    90deg,
+    var(--ifm-color-primary) 10%,
+    var(--ifm-background-surface-color) 100%
+  ); */
+  background-color: var(--ifm-background-surface-color);
+  border-left: 1px solid var(--ifm-color-emphasis-200);
+}
+.heroFeed table {
+  background: var(--ifm-background-surface-color);
+  border-radius: 0.5rem;
+}
+
+.heroFeed h2 {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--ifm-background-surface-color);
+}
+.feedCollapsed {
+  grid-template-columns: minmax(0, 2fr) minmax(56px, 1fr);
 }
 .subHeading {
   padding: 1em;
@@ -26,6 +65,16 @@ header {
 @media screen and (max-width: 996px) {
   .heroBanner {
     padding: 2rem;
+    grid-template-columns: 1fr;
+  }
+  .heroFeed,
+  .feedCollapsed .heroFeed {
+    border-left: 0;
+    border-top: 1px solid var(--ifm-color-emphasis-200);
+  }
+  .heroBanner svg {
+    height: auto;
+    max-height: 20em;
   }
 }
 

@@ -1,22 +1,29 @@
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
-import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
-import Heading from '@theme/Heading';
+import Feed from '@site/src/components/Feed';
 
 import styles from './index.module.css';
 const Svg = require('@site/static/img/govql-social-cleaned.svg').default;
 
 function HomepageHeader() {
   const { siteConfig } = useDocusaurusContext();
+  const [feedExpanded, setFeedExpanded] = useState(true);
   return (
-    <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
+    <header
+      className={clsx(styles.heroBanner, !feedExpanded && styles.feedCollapsed)}
+    >
+      <div className={clsx('hero hero--primary', styles.heroTitle)}>
+        <div className="container">
           <Svg role="img" className="heroImage"/>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-
+          <p className="hero__subtitle">{siteConfig.tagline}</p>
+        </div>
+      </div>
+      <div className={styles.heroFeed}>
+        <Feed onExpandedChange={setFeedExpanded} />
       </div>
     </header>
   );
