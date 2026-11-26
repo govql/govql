@@ -66,5 +66,5 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
         run: |
           echo "Lint: $LINT_RESULT"
-          echo "Tests: $TEST_RESULT
+          echo "Tests: $TEST_RESULT"
           test "$LINT_RESULT" = success && test "$TEST_RESULT" = success
