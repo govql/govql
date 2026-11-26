@@ -7,9 +7,7 @@ on:
       - 'mcp-server/**'
       - '.github/workflows/mcp-server.yml'
   pull_request:
-    paths:
-      - 'mcp-server/**'
-      - '.github/workflows/mcp-server.yml'
+    branches: [main]
 
 # Least privilege: lint + test only need to read the repo. Declaring any
 # permissions block denies every scope not listed, so a PR-triggered run
@@ -54,3 +52,19 @@ jobs:
         run: uv sync
       - name: Run tests
         run: uv run pytest -v
+
+  pr-checks:
+    name: MCP PR checks
+    if: always() && github.event_name == 'pull_request'
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check lint and test results
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          echo "Lint: $LINT_RESULT"
+          echo "Tests: $TEST_RESULT"
+          test "$LINT_RESULT" = success && test "$TEST_RESULT" = success

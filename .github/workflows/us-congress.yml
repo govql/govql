@@ -11,9 +11,7 @@ on:
       - 'us-congress/**'
       - '.github/workflows/us-congress.yml'
   pull_request:
-    paths:
-      - 'us-congress/**'
-      - '.github/workflows/us-congress.yml'
+    branches: [main]
   # Manual rollback / on-demand redeploy (task 0007): run the same gated deploy
   # path against an arbitrary commit. It pulls that commit's retained images —
   # no rebuild — so the images job is skipped and no digests are verified.
@@ -38,19 +36,12 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
-    # Secondary guard against a stamp→deploy loop: skip runs whose head commit
-    # is commit-changelog's stamp commit. The primary guard is that the
-    # built-in GITHUB_TOKEN's pushes never trigger workflow runs at all; this
-    # backstop holds even if that push token were ever swapped for a PAT.
-    # Everything that could loop (deploy, docs publish) needs this job, so
-    # skipping it kills the run. workflow.test.js pins the prefix to the
-    # message commit-changelog writes — change them together.
-    # A manual dispatch (rollback/redeploy) deploys retained images, so it must
-    # not rebuild — skip the whole job. deploy tolerates the skip (its `if`).
+    # Skip manual rollbacks and automated changelog commits.
     if: >-
       github.event_name != 'workflow_dispatch' && (
       github.event_name == 'pull_request' ||
-      !startsWith(github.event.head_commit.message, 'docs(us-congress): stamp changelog') )
+      !(github.actor_id == '361384753' &&
+      startsWith(github.event.head_commit.message, 'docs(us-congress): stamp changelog')) )
     permissions:
       contents: read
       packages: write
@@ -204,6 +195,22 @@ jobs:
       # ubuntu runners).
       - name: Ingester pg integration tests
         run: cd us-congress/ingester && npm run test:integration
+
+  pr-checks:
+    name: Congress PR checks
+    if: always() && github.event_name == 'pull_request'
+    needs: [images, test]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check build and test results
+        env:
+          IMAGES_RESULT: ${{ needs.images.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          echo "Image builds: $IMAGES_RESULT"
+          echo "Tests: $TEST_RESULT"
+          test "$IMAGES_RESULT" = success && test "$TEST_RESULT" = success
 
   # Announce that a deploy is waiting for its one-click approval. Runs outside
   # the production environment — a job inside it would itself wait on the
@@ -385,26 +392,20 @@ jobs:
             --data "{\"text\":\"${text}: ${GITHUB_SHA} — ${RUN_URL}\"}" \
             "$SLACK_WEBHOOK_URL"
 
-  # Commit the stamped changelog back to main, but only after the deploy —
-  # health check included — succeeded; a failed deploy discards the stamp.
-  # The artifact carries the exact bytes the published docs image was built
-  # from. The push uses the built-in GITHUB_TOKEN (left in .git/config by
-  # checkout), whose pushes never trigger workflow runs — the primary guard
-  # against a re-deploy loop; the images job's commit-message skip is the
-  # backstop. The commit message prefix is load-bearing: the images guard and
-  # workflow.test.js both pin it.
+  # Save the exact dated changelog that shipped, after the health check passes.
   commit-changelog:
     needs: [deploy]
     if: github.event_name == 'push' && needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    environment:
+      name: changelog-publish
     steps:
-      # Check out the current tip of main, not the deployed sha: main may
-      # have advanced during the approval gate, and the push must fast-forward.
       - uses: actions/checkout@v5
         with:
           ref: main
+          persist-credentials: false
 
       - name: Download stamped changelog
         uses: actions/download-artifact@v7
@@ -412,39 +413,56 @@ jobs:
           name: stamped-changelog
           path: stamped
 
-      - name: Commit the stamp to main
+      - name: Check whether the changelog can be updated
+        id: stamp
         env:
-          TARGET_SHA: ${{ github.sha }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # If the changelog moved on main since the stamp was taken (e.g. a
-          # changelog-only merge during the approval gate, or a prior queued
-          # deploy's stamp landing first), overwriting it would silently drop
-          # those entries. Skip — loudly, since the deploy shipped healthy but
-          # main stays unstamped. Known limitation, accepted: the skip
-          # self-heals at the next deploy, which re-stamps whatever Unreleased
-          # then holds — with a later date if that deploy crosses midnight.
-          if ! diff -q stamped/changelog-input.md us-congress/CHANGELOG.md > /dev/null; then
-            echo "::warning::changelog changed on main since the stamp was taken — commit-back skipped; the deploy shipped but main stays unstamped until the next deploy"
-            curl -fsS -X POST -H 'Content-type: application/json' \
-              --data "{\"text\":\"⚠️ govql deploy ${TARGET_SHA} is healthy, but the changelog stamp was NOT committed back (changelog moved on main) — ${RUN_URL}\"}" \
-              "$SLACK_WEBHOOK_URL" || true
+          test -f stamped/changelog-input.md
+          test -f stamped/us-congress/CHANGELOG.md
+
+          if ! cmp -s stamped/changelog-input.md us-congress/CHANGELOG.md; then
+            message="GovQL deploy $GITHUB_SHA is healthy, but the changelog changed on main before the stamp could be saved. $RUN_URL"
+            echo "::warning::$message"
+            jq -n --arg text "$message" '{text: $text}' |
+              curl -fsS -H 'Content-Type: application/json' --data-binary @- \
+                "$SLACK_WEBHOOK_URL" || true
             exit 0
           fi
-          mv stamped/us-congress/CHANGELOG.md us-congress/CHANGELOG.md
-          if git diff --quiet -- us-congress/CHANGELOG.md; then
-            echo "Unreleased was empty — nothing was stamped, nothing to commit"
+
+          if cmp -s stamped/changelog-input.md stamped/us-congress/CHANGELOG.md; then
+            echo "No dated changelog changes to save."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add us-congress/CHANGELOG.md
-          git commit -m "docs(us-congress): stamp changelog for deploy $TARGET_SHA"
-          # A merge can land on main between checkout and push; one rebase
-          # retry covers it. If the rebase hits a conflict (that merge touched
-          # the changelog), fail loudly rather than force anything.
-          git push origin HEAD:main || {
-            git pull --rebase origin main
-            git push origin HEAD:main
-          }
+
+          file_sha=$(git rev-parse HEAD:us-congress/CHANGELOG.md)
+          echo "file_sha=$file_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Sign in as the changelog App
+        id: app-token
+        if: steps.stamp.outputs.file_sha != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.CHANGELOG_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}
+
+      - name: Save the dated changelog to main
+        if: steps.stamp.outputs.file_sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          FILE_SHA: ${{ steps.stamp.outputs.file_sha }}
+        run: |
+          response="$RUNNER_TEMP/changelog-response.txt"
+          jq -n \
+            --arg message "docs(us-congress): stamp changelog for deploy $GITHUB_SHA" \
+            --arg sha "$FILE_SHA" \
+            --rawfile content stamped/us-congress/CHANGELOG.md \
+            '{branch: "main", message: $message, sha: $sha, content: ($content | @base64)}' |
+            gh api --method PUT --include \
+              "repos/$GITHUB_REPOSITORY/contents/us-congress/CHANGELOG.md" \
+              --input - > "$response" || {
+                cat "$response"
+                exit 1
+              }

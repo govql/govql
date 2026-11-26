@@ -29,7 +29,7 @@ discoverability with no auto-close; links and closing keywords auto-close on mer
 **Do this (no auto-close):**
 
 - In every PR body, write a plain reference — `Part of #N` (or `Refs #N`, or just
-  `#N`). This records a cross-reference in issue #N's timeline *and* leaves a
+  `#N`). This records a cross-reference in issue #N's timeline _and_ leaves a
   clickable link in the PR body, in both directions, and does not close the issue.
 - Name the branch `<issue#>-<slug>` and create it with
   `git checkout -b <issue#>-<slug> main`. The number ties it to the issue at a
@@ -40,7 +40,7 @@ discoverability with no auto-close; links and closing keywords auto-close on mer
 - Closing keywords — `Closes` / `Fixes` / `Resolves #N`. Use one **only** on the
   PR that is meant to close the issue.
 - A Development-panel link, including any branch **"Created from" the issue** via
-  the GitHub issue UI. Merging *any* PR from such a branch closes the issue even if
+  the GitHub issue UI. Merging _any_ PR from such a branch closes the issue even if
   the body says "Part of #N" — this is exactly how #56 was wrongly closed by the
   scaffolding PR #57. After merging anything tied to a tracking issue, confirm it's
   still open (`gh issue view <n> --json state`).
@@ -54,6 +54,7 @@ hand once every referenced PR has merged.
 gh pr list --state all --search "#56 in:body"                          # issue -> PRs
 gh pr view <PR#> --json body --jq '[.body | scan("#[0-9]+")] | unique' # PR -> issue
 ```
+
 **Planning-tool artifacts (Superpowers etc.) go under `plans/`, never
 a root `docs/`.** Superpowers defaults to writing plans and specs into
 `docs/superpowers/{plans,specs}`, but a new top-level `docs/` at the repo root
@@ -81,7 +82,7 @@ The `us-congress` Postgres schema is managed with **Flyway**.
 
 - **All schema changes are Flyway migrations in `us-congress/db/migrations/`.**
   Never edit a schema file in place, and never hand-apply DDL (`psql`/`docker
-  exec`) to a live database. The deploy applies pending migrations automatically.
+exec`) to a live database. The deploy applies pending migrations automatically.
 - **Naming: `Vnnn__description.sql`** — capital `V`, a **zero-padded 3-digit**
   sequential version, a **double** underscore, a description, `.sql`
   (e.g. `V003__add_foo_table.sql`). Flyway orders versions numerically; the
@@ -107,13 +108,12 @@ The `us-congress` Postgres schema is managed with **Flyway**.
   deploy verdict Slack reports, not just "containers started". After a healthy
   deploy, CI stamps `us-congress/CHANGELOG.md`'s `Unreleased` section with the
   America/Chicago date and commits it back to `main` (`commit-changelog` job).
-  Two loop guards keep that commit from re-deploying, and **both are
-  load-bearing**: the push uses the built-in `GITHUB_TOKEN` (its pushes never
-  trigger workflows), and the `images` job skips runs whose head commit starts
-  with `docs(us-congress): stamp changelog` — the message prefix, the guard,
-  and `workflow.test.js` pin each other; change them together. Never run a
-  bare `docker compose up` on the droplet — compose resolves `${IMAGE_TAG}` to
-  `latest` without the scripts; the manual path is
+  The commit-changelog job uses the GovQL Changelog GitHub App to save the exact
+  dated file after a healthy deploy. The images job skips commits from that
+  App’s bot account when the message begins with docs(us-congress): stamp
+  changelog. The bot ID, commit prefix, and workflow.test.js must agree. Never
+  run a bare `docker compose up` on the droplet — compose resolves
+  `${IMAGE_TAG}` to `latest` without the scripts; the manual path is
   `us-congress/deploy/up.sh --pull`. Schema changes ride along: the gated
   one-shot `flyway` service runs `migrate` on the way up and the API server
   restarts after it (existing databases were adopted with a one-time
@@ -177,7 +177,7 @@ with the Congress.gov bills connector as the reference implementation.
 Postgres `TIMESTAMPTZ` (and `now()`) has **microsecond** precision; a JavaScript
 `Date` has only **millisecond** precision. `node-postgres` deserializes a
 `TIMESTAMPTZ` into a `Date`, **silently truncating** the microseconds. So any value
-that round-trips DB → JS `Date` → DB comes back a few microseconds *smaller* than
+that round-trips DB → JS `Date` → DB comes back a few microseconds _smaller_ than
 the original.
 
 The failure mode is a watermark/cursor that looks **perpetually stale**: you store
