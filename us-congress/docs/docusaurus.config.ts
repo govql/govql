@@ -39,6 +39,14 @@ const config: Config = {
     'https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;700&display=swap',
   ],
 
+  scripts: [
+    {
+      src: 'https://umami.is-very.online/script.js',
+      defer: true,
+      'data-website-id': 'bbc2af1e-143b-43b0-bef5-e02349a0e6a2',
+    },
+  ],
+
   presets: [
     [
       'classic',
@@ -101,7 +109,7 @@ const config: Config = {
       },
       items: [
         {
-        type: 'docSidebar',
+          type: 'docSidebar',
           sidebarId: 'quickStartSidebar',
           position: 'left',
           label: 'Quick Start',
@@ -202,6 +210,5 @@ const config: Config = {
     },
   } satisfies Preset.ThemeConfig,
 };
-
 
 export default config;
