@@ -97,7 +97,7 @@ const config: Config = {
 
   themeConfig: {
     // Replace with your project's social card
-    image: 'img/govql-social-card.jpg',
+    image: 'img/govql-social-card.png',
     colorMode: {
       respectPrefersColorScheme: true,
     },
